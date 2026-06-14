@@ -1,0 +1,117 @@
+# SPDX-FileCopyrightText: 2026 Standard Voice Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+[project]
+name = "std-faster-whisper"
+version = "0.1.0"
+description = "Standard ASR engine plugin for faster-whisper (batch + windowed streaming)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE", "LICENSE-THIRD-PARTY.md"]
+authors = [{ name = "Standard Voice Contributors" }]
+keywords = ["asr", "speech-to-text", "whisper", "faster-whisper", "standard-asr", "ctranslate2"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
+]
+dependencies = [
+    # faster-whisper is the upstream inference engine we adapt (MIT; pulls in
+    # CTranslate2). A thin adapter tracks it via this version pin -- see
+    # docs/STANDARD_ASR_FINDINGS.md for the adapter-vs-fork rationale.
+    "faster-whisper>=1.1,<2",
+    # The protocol this plugin implements. Pinned to the v0.1.0 redesign branch
+    # until standard-asr cuts its first PyPI release; swap to a version
+    # specifier (>=0.1.0) at that point.
+    "standard-asr @ git+https://github.com/standard-voice/standard_asr.git@refactor/v0.1.0-redesign",
+]
+
+[project.urls]
+Homepage = "https://github.com/standard-voice/std-faster-whisper"
+"Standard ASR" = "https://github.com/standard-voice/standard_asr"
+"faster-whisper (upstream)" = "https://github.com/SYSTRAN/faster-whisper"
+
+# One entry point per preset (spec IC.7: model selection = entry-point preset,
+# never an init `model` field). faster-whisper ships ~15 sizes; we register a
+# representative spread from `tiny` (fast tests) to `large-v3` (production) and
+# document how to add more in the README. The factory return annotation is the
+# CONCRETE engine class so the registry reads class-level metadata without
+# instantiating (adapting_engine.md "Publish").
+[project.entry-points."standard_asr.models"]
+"faster-whisper/tiny" = "std_faster_whisper.entrypoint:create_tiny"
+"faster-whisper/base" = "std_faster_whisper.entrypoint:create_base"
+"faster-whisper/small" = "std_faster_whisper.entrypoint:create_small"
+"faster-whisper/medium" = "std_faster_whisper.entrypoint:create_medium"
+"faster-whisper/large-v3" = "std_faster_whisper.entrypoint:create_large_v3"
+"faster-whisper/distil-large-v3" = "std_faster_whisper.entrypoint:create_distil_large_v3"
+"faster-whisper/large-v3-turbo" = "std_faster_whisper.entrypoint:create_turbo"
+
+[build-system]
+requires = ["uv-build>=0.9,<0.12"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = "src"
+module-name = "std_faster_whisper"
+
+# Test/lint tooling. The unit suite injects a fake faster_whisper module via
+# sys.modules and NEVER downloads weights; the real-inference verification is a
+# separate, opt-in script (scripts/verify_inference.py) gated on a downloaded
+# model. See VERIFICATION.md.
+[dependency-groups]
+dev = [
+    "pytest>=8.4",
+    "pytest-cov>=7.0",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.9",
+    "pyright>=1.1.390",
+]
+
+[tool.pytest.ini_options]
+addopts = [
+    "-q",
+    "--cov=std_faster_whisper",
+    "--cov-branch",
+    "--cov-report=term-missing:skip-covered",
+]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+# Warnings-as-errors mirrors the core suite: our own deprecations/bugs fail.
+filterwarnings = ["error"]
+
+[tool.coverage.run]
+branch = true
+source = ["std_faster_whisper"]
+
+[tool.coverage.report]
+exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "NPY", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+# RUF012 flags mutable class-attribute defaults, but `_metadata.py` / `_config.py`
+# declare *pydantic model fields* (BaseProperties / BaseConfig / ProviderParams
+# subclasses), where `list[...] = [...]` is the correct pydantic idiom -- pydantic
+# deep-copies field defaults per instance, so there is no shared-mutable footgun.
+# Ruff does not auto-detect these base classes as pydantic, hence the scoped ignore.
+"src/std_faster_whisper/_metadata.py" = ["RUF012"]
+"src/std_faster_whisper/_config.py" = ["RUF012"]
+# Test fakes use class-level recording slots reset by the fixture (not pydantic);
+# ClassVar annotations would only add noise to throwaway stubs.
+"tests/conftest.py" = ["RUF012"]
+
+[tool.pyright]
+include = ["src"]
+pythonVersion = "3.10"
+typeCheckingMode = "strict"
+reportMissingTypeStubs = false
