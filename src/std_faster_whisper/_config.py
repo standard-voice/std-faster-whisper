@@ -22,7 +22,7 @@ from collections.abc import Sequence
 from typing import Any, Literal
 
 from pydantic import Field, SecretStr
-from standard_asr import (
+from standard_asr.engine import (
     BaseConfig,
     DeviceConfigMixin,
     DownloadConfigMixin,

@@ -53,10 +53,10 @@ This installs `faster-whisper` (and CTranslate2, PyAV, …) automatically. Until
 
 ```bash
 # Discover installed models (this plugin registers seven presets)
-standard-asr models list
+standard-asr list
 
 # Inspect a preset's metadata, capabilities, and params schema (no model load)
-standard-asr models show faster-whisper/tiny
+standard-asr show faster-whisper/tiny
 
 # Transcribe a file
 standard-asr transcribe faster-whisper/tiny path/to/audio.wav
@@ -134,7 +134,7 @@ and streams the result back.
 ## Presets
 
 Each model is a separate **entry-point preset** (spec IC.7: model selection =
-entry-point preset, never an init `model` field), so `standard-asr models list`,
+entry-point preset, never an init `model` field), so `standard-asr list`,
 the registry, and any settings UI can enumerate the available models:
 
 | Entry-point key                     | Whisper model      | Notes |
@@ -180,7 +180,7 @@ All fields also fall back to environment variables
 | `model_path` | `None` | Optional **local** CTranslate2 checkpoint override. |
 
 Model weights load **lazily** on first transcription. Use `engine.prepare()`
-(or `standard-asr models prepare …`) to pre-download/warm without transcribing.
+(or `standard-asr prepare …`) to pre-download/warm without transcribing.
 Downloads respect `STANDARD_ASR_ALLOW_DOWNLOAD`.
 
 ## Streaming

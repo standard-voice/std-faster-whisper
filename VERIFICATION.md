@@ -50,7 +50,7 @@ export STANDARD_ASR_FASTER_WHISPER__COMPUTE_TYPE=int8
 ## 1. Discovery — the plugin's seven presets resolve
 
 ```bash
-uv run standard-asr models list
+uv run standard-asr list
 ```
 
 Observed:
@@ -70,7 +70,7 @@ Inspect one preset's metadata, capabilities, and params schema **without loading
 the model**:
 
 ```bash
-uv run standard-asr models show faster-whisper/tiny
+uv run standard-asr show faster-whisper/tiny
 ```
 
 (Prints the entry-point coordinates plus the full canonical capabilities JSON and

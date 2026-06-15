@@ -4,7 +4,7 @@
 """Static Properties and declared Capabilities for the faster-whisper engine.
 
 Everything here is read at the *class* level without instantiating the engine
-(``standard-asr models show``, the registry, REST ``GET /v1/capabilities``), so
+(``standard-asr show``, the registry, REST ``GET /v1/capabilities``), so
 it MUST be honest and self-contained. Capabilities are declared **fail-closed**:
 we declare only what faster-whisper genuinely delivers, in both ``batch`` and
 ``streaming`` modes (the streaming numbers are deliberately conservative -- see
@@ -15,7 +15,6 @@ from __future__ import annotations
 
 from typing import Literal
 
-from standard_asr import BaseProperties, InputKind, SampleRateRange
 from standard_asr.capabilities import (
     BatchCapabilities,
     DeclaredCapabilities,
@@ -33,6 +32,7 @@ from standard_asr.capabilities import (
     StreamTimestampsCap,
     WordTimestampsCap,
 )
+from standard_asr.engine import BaseProperties, InputKind, SampleRateRange
 
 #: Whisper supports ~99 languages. We surface a representative multilingual
 #: subset for the discovery UI / candidate-language validation; the model itself

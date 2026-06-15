@@ -110,8 +110,8 @@ def test_disable_tqdm_monitor_never_raises(monkeypatch: pytest.MonkeyPatch) -> N
 
 def test_prepared_to_pcm_requires_array() -> None:
     # Defensive guard: the streaming whole-input path expects a negotiated array.
-    from standard_asr import PreparedAudio
     from standard_asr.audio_input import InputKind
+    from standard_asr.engine import PreparedAudio
 
     prepared = PreparedAudio(kind=InputKind.ENCODED_BYTES, data=b"not-an-array")
     with pytest.raises(TranscriptionError, match="not delivered as an array"):
@@ -119,8 +119,8 @@ def test_prepared_to_pcm_requires_array() -> None:
 
 
 def test_prepared_to_pcm_quantizes_array() -> None:
-    from standard_asr import PreparedAudio
     from standard_asr.audio_input import InputKind
+    from standard_asr.engine import PreparedAudio
 
     arr = np.array([0.0, 1.0, -1.0, 2.0, np.nan], dtype=np.float32)  # clipped + sanitized
     prepared = PreparedAudio(kind=InputKind.ARRAY, array=arr, sample_rate=16000)

@@ -10,9 +10,9 @@ points via ``standard_asr.discover_models`` and ``standard_asr.compliance``.
 
 from __future__ import annotations
 
-from standard_asr import check_entrypoints, discover_models
+from standard_asr import discover_models
 from standard_asr.audio_format import AudioFormat
-from standard_asr.compliance import check_sync_bridge
+from standard_asr.compliance import check_entrypoints, check_sync_bridge
 
 from std_faster_whisper import (
     BaseASR,
@@ -50,8 +50,8 @@ def test_all_presets_discovered() -> None:
 
 def test_by_engine_lists_presets() -> None:
     registry = discover_models()
-    # ModelRegistry.by_engine returns the entry-point KEYS for the engine.
-    assert set(registry.by_engine("faster-whisper")) == _EXPECTED_KEYS
+    # ModelRegistry.keys_by_engine returns the entry-point KEYS for the engine.
+    assert set(registry.keys_by_engine("faster-whisper")) == _EXPECTED_KEYS
 
 
 def test_registry_resolves_engine_class_without_instantiation() -> None:
@@ -63,7 +63,7 @@ def test_registry_resolves_engine_class_without_instantiation() -> None:
     assert engine_class.properties.model_id == "faster-whisper/tiny"
     # The spec exposes the parsed key components.
     spec = registry.spec("faster-whisper/tiny")
-    assert spec.key == "faster-whisper/tiny"
+    assert spec.model_id == "faster-whisper/tiny"
     assert spec.engine_id == "faster-whisper"
     assert spec.model_name == "tiny"
 
