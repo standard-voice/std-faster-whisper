@@ -6,7 +6,7 @@ SPDX-License-Identifier: Apache-2.0
 # Standard ASR v0.1.0 — plugin-author findings
 
 Findings from building `std-faster-whisper` as a fully independent plugin against
-`standard-asr @ refactor/v0.1.0-redesign` (commit `4962a74`). The protocol is in
+`standard-asr @ main`. The protocol is in
 good shape — a complete, honestly-declared **batch + streaming** engine with
 discovery, compliance, CLI, doctor, real inference, 100% test coverage, and
 pyright-strict typing came together in one sitting. The items below are the rough

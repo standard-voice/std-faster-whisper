@@ -18,7 +18,7 @@ inference on real audio, and the unit suite.
 | Python | 3.12.11 (pinned via `.python-version`; system Python is 3.14, which has no CTranslate2 wheel) |
 | uv | 0.11.21 |
 | ffmpeg | 8.1.1 (also bundled by PyAV) |
-| `standard-asr` | 0.1.0 @ git `refactor/v0.1.0-redesign` (commit `4962a74`) |
+| `standard-asr` | 0.1.0 @ git `main` |
 | `faster-whisper` | 1.2.1 |
 | `ctranslate2` | 4.8.0 |
 | `numpy` | 2.4.6 |

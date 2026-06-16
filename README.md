@@ -5,6 +5,8 @@ SPDX-License-Identifier: Apache-2.0
 
 # std-faster-whisper
 
+> ⚠️ **Experimental — for protocol testing.** This is an experimental Standard ASR engine plugin, published to exercise and validate the [Standard ASR](https://github.com/standard-voice/standard_asr) interface. Expect breaking changes; it is not production-ready.
+
 A **[Standard ASR](https://github.com/standard-voice/standard_asr) engine plugin
 for [faster-whisper](https://github.com/SYSTRAN/faster-whisper)**.
 
@@ -41,7 +43,7 @@ pip install std-faster-whisper
 
 This installs `faster-whisper` (and CTranslate2, PyAV, …) automatically. Until
 `standard-asr` cuts its first PyPI release, this package pins it to the
-`refactor/v0.1.0-redesign` branch via a git dependency.
+`main` branch via a git dependency.
 
 > **Hardware.** faster-whisper runs on CPU (CTranslate2 `int8` is a good fast
 > default), CUDA GPUs (`device="cuda"`, `compute_type="float16"`), and Apple

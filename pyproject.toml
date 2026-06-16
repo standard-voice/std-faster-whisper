@@ -12,7 +12,7 @@ license-files = ["LICENSE", "LICENSE-THIRD-PARTY.md"]
 authors = [{ name = "Standard Voice Contributors" }]
 keywords = ["asr", "speech-to-text", "whisper", "faster-whisper", "standard-asr", "ctranslate2"]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
@@ -24,10 +24,10 @@ dependencies = [
     # CTranslate2). A thin adapter tracks it via this version pin -- see
     # docs/STANDARD_ASR_FINDINGS.md for the adapter-vs-fork rationale.
     "faster-whisper>=1.1,<2",
-    # The protocol this plugin implements. Pinned to the v0.1.0 redesign branch
-    # until standard-asr cuts its first PyPI release; swap to a version
-    # specifier (>=0.1.0) at that point.
-    "standard-asr @ git+https://github.com/standard-voice/standard_asr.git@refactor/v0.1.0-redesign",
+    # The protocol this plugin implements. Pinned to the main branch until
+    # standard-asr cuts its first PyPI release; swap to a version specifier
+    # (>=0.1.0) at that point.
+    "standard-asr @ git+https://github.com/standard-voice/standard_asr.git@main",
 ]
 
 [project.urls]
