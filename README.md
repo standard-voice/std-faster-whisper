@@ -31,19 +31,16 @@ MIT; see [`LICENSE-THIRD-PARTY.md`](LICENSE-THIRD-PARTY.md)).
 
 ## Install
 
-```bash
-# With uv (recommended)
-uv add std-faster-whisper          # once published to PyPI
-# ...or from a checkout during development:
-uv pip install -e .
+> **Not yet published to PyPI** — install from GitHub:
 
-# With pip
-pip install std-faster-whisper
+```bash
+uv pip install git+https://github.com/standard-voice/std-faster-whisper
 ```
 
-This installs `faster-whisper` (and CTranslate2, PyAV, …) automatically. Until
-`standard-asr` cuts its first PyPI release, this package pins it to the
-`main` branch via a git dependency.
+This installs `faster-whisper` (and CTranslate2, PyAV, …) and `standard-asr`
+(pinned to the GitHub `main` branch) automatically. Once published to PyPI this
+becomes `uv pip install std-faster-whisper`. For development from a checkout, use
+`uv pip install -e .`.
 
 > **Hardware.** faster-whisper runs on CPU (CTranslate2 `int8` is a good fast
 > default), CUDA GPUs (`device="cuda"`, `compute_type="float16"`), and Apple
