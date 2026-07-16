@@ -29,7 +29,7 @@ from standard_asr.engine import (
     LanguageConfigMixin,
     secret_field,
 )
-from standard_asr.runtime_params import ProviderParams
+from standard_asr.contract.params import ProviderParams
 
 
 class FasterWhisperConfig(

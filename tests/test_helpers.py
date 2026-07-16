@@ -77,7 +77,7 @@ def test_provider_kwargs_includes_temperature_when_set() -> None:
 def test_provider_kwargs_foreign_type_falls_back_to_defaults() -> None:
     # Defensive: a non-FasterWhisperParams instance falls back to defaults rather
     # than raising (the real swap-safety raise happens earlier, in the gate).
-    from standard_asr.runtime_params import ProviderParams
+    from standard_asr.contract.params import ProviderParams
 
     class Other(ProviderParams):
         x: int = 1

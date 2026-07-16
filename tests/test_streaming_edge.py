@@ -10,9 +10,9 @@ from typing import Any
 import numpy as np
 import pytest
 from standard_asr import RuntimeParams, TranscriptionEvent
-from standard_asr.audio_format import AudioFormat
-from standard_asr.exceptions import TranscriptionError
-from standard_asr.runtime_params import WordTimestampGranularity
+from standard_asr.audio.format import AudioFormat
+from standard_asr.contract.exceptions import TranscriptionError
+from standard_asr.contract.params import WordTimestampGranularity
 
 from std_faster_whisper import TinyASR
 from std_faster_whisper._streaming import FasterWhisperStreamingSession
@@ -110,7 +110,7 @@ def test_disable_tqdm_monitor_never_raises(monkeypatch: pytest.MonkeyPatch) -> N
 
 def test_prepared_to_pcm_requires_array() -> None:
     # Defensive guard: the streaming whole-input path expects a negotiated array.
-    from standard_asr.audio_input import InputKind
+    from standard_asr.audio.input import InputKind
     from standard_asr.engine import PreparedAudio
 
     prepared = PreparedAudio(kind=InputKind.ENCODED_BYTES, data=b"not-an-array")
@@ -119,7 +119,7 @@ def test_prepared_to_pcm_requires_array() -> None:
 
 
 def test_prepared_to_pcm_quantizes_array() -> None:
-    from standard_asr.audio_input import InputKind
+    from standard_asr.audio.input import InputKind
     from standard_asr.engine import PreparedAudio
 
     arr = np.array([0.0, 1.0, -1.0, 2.0, np.nan], dtype=np.float32)  # clipped + sanitized

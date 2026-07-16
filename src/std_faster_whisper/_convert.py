@@ -15,7 +15,7 @@ from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
-from standard_asr.results import Segment, Word
+from standard_asr.contract.results import Segment, Word
 
 #: 16-bit signed little-endian PCM is the canonical wire encoding (spec AI). The
 #: reverse of the canonical int16->float scaling is /32768 (spec AI R4).

@@ -11,7 +11,7 @@ points via ``standard_asr.discover_models`` and ``standard_asr.compliance``.
 from __future__ import annotations
 
 from standard_asr import discover_models
-from standard_asr.audio_format import AudioFormat
+from standard_asr.audio.format import AudioFormat
 from standard_asr.compliance import check_entrypoints, check_sync_bridge
 
 from std_faster_whisper import (

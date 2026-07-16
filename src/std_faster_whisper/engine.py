@@ -30,18 +30,18 @@ from standard_asr import (
     TranscriptionResult,
     TranscriptionSession,
 )
-from standard_asr.audio_format import AudioFormat
-from standard_asr.capabilities import DeclaredCapabilities
+from standard_asr.audio.format import AudioFormat
+from standard_asr.contract.capabilities import DeclaredCapabilities
 from standard_asr.engine import (
     BaseConfig,
     BaseProperties,
     EngineBase,
     PreparedAudio,
 )
-from standard_asr.exceptions import DiscoveryError, TranscriptionError
-from standard_asr.language import effective_language, normalize_bcp47
-from standard_asr.runtime import allow_downloads, resolve_download_root
-from standard_asr.runtime_params import ProviderParams, WordTimestampGranularity
+from standard_asr.contract.exceptions import DiscoveryError, TranscriptionError
+from standard_asr.contract.language import effective_language, normalize_bcp47
+from standard_asr.runtime.downloads import allow_downloads, resolve_download_root
+from standard_asr.contract.params import ProviderParams, WordTimestampGranularity
 
 from ._config import FasterWhisperConfig, FasterWhisperParams, provider_kwargs
 from ._convert import convert_segments, safe_extra

@@ -108,7 +108,7 @@ Handing `FasterWhisperParams` to a *different* engine raises
 ```python
 import asyncio
 from standard_asr import discover_models
-from standard_asr.audio_format import AudioFormat
+from standard_asr.audio.format import AudioFormat
 
 async def main() -> None:
     engine = discover_models().create("faster-whisper/tiny", device="cpu", compute_type="int8")

@@ -45,7 +45,7 @@ from typing import TYPE_CHECKING, Any, cast
 import numpy as np
 from numpy.typing import NDArray
 from standard_asr import RuntimeParams, TranscriptionEvent, TranscriptionSession
-from standard_asr.language import effective_language, normalize_bcp47
+from standard_asr.contract.language import effective_language, normalize_bcp47
 
 from ._config import FasterWhisperConfig, provider_kwargs
 from ._convert import convert_segments, pcm_s16le_to_float32
@@ -150,7 +150,7 @@ class FasterWhisperStreamingSession(TranscriptionSession):
             and a terminal ``done``.
         """
         self._engine.ensure_loaded()
-        from standard_asr.runtime_params import WordTimestampGranularity
+        from standard_asr.contract.params import WordTimestampGranularity
 
         want_words = self._params.word_timestamps == WordTimestampGranularity.WORD
         pending = bytearray()

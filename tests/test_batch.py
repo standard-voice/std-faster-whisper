@@ -17,20 +17,20 @@ from pathlib import Path
 import numpy as np
 import pytest
 from standard_asr import RuntimeParams, StandardASR
-from standard_asr.audio_input import AudioBytes, AudioPath
-from standard_asr.capabilities import (
+from standard_asr.audio.input import AudioBytes, AudioPath
+from standard_asr.contract.capabilities import (
     DeclaredCapabilities,
     PhraseHintsCap,
     PromptCap,
     WordTimestampsCap,
 )
-from standard_asr.exceptions import (
+from standard_asr.contract.exceptions import (
     DiscoveryError,
     InvalidProviderParamError,
     TranscriptionError,
     UnsupportedFeatureError,
 )
-from standard_asr.runtime_params import ProviderParams, WordTimestampGranularity
+from standard_asr.contract.params import ProviderParams, WordTimestampGranularity
 
 from std_faster_whisper import (
     DistilLargeV3ASR,

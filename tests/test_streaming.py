@@ -15,15 +15,15 @@ from typing import Any
 
 import pytest
 from standard_asr import TranscriptionEvent
-from standard_asr.audio_format import AudioFormat
-from standard_asr.capabilities import (
+from standard_asr.audio.format import AudioFormat
+from standard_asr.contract.capabilities import (
     FinalityCap,
     FlagCap,
     ReconnectCap,
     StreamTimestampsCap,
 )
 from standard_asr.compliance import check_event_sequence, check_streaming_param_gating
-from standard_asr.exceptions import UnsupportedFeatureError
+from standard_asr.contract.exceptions import UnsupportedFeatureError
 
 from std_faster_whisper import FasterWhisperASR, TinyASR
 from std_faster_whisper._streaming import FasterWhisperStreamingSession
@@ -209,7 +209,7 @@ def test_unsupported_streaming_candidate_languages_rejected(
 def test_streaming_word_timestamps_unsupported_granularity_strict() -> None:
     # char granularity is not declared; strict mode rejects it at the gate.
     from standard_asr import RuntimeParams
-    from standard_asr.runtime_params import WordTimestampGranularity
+    from standard_asr.contract.params import WordTimestampGranularity
 
     engine = TinyASR()
     with pytest.raises(UnsupportedFeatureError):
