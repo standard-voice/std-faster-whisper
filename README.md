@@ -178,9 +178,19 @@ All fields also fall back to environment variables
 | `hf_token` | `None` | **Secret** HF token for gated/private repos (masked in dumps). |
 | `model_path` | `None` | Optional **local** CTranslate2 checkpoint override. |
 
-Model weights load **lazily** on first transcription. Use `engine.prepare()`
-(or `standard-asr prepare …`) to pre-download/warm without transcribing.
-Downloads respect `STANDARD_ASR_ALLOW_DOWNLOAD`.
+Model weights load **lazily** on first transcription. Downloads respect
+`STANDARD_ASR_ALLOW_DOWNLOAD`.
+
+**Artifact lifecycle (protocol 1.1).** `standard-asr status faster-whisper/tiny`
+reports whether the preset's CTranslate2 bundle is cached (`ready` requires
+both `model.bin` and `tokenizer.json` — without the tokenizer, upstream would
+silently fetch it from the Hub past every download gate). `standard-asr pull`
+acquires or repairs the bundle without loading a model; `pull --refresh`
+re-resolves a mutable revision (a pinned 40-hex commit is immutable and a
+no-op). With `local_files_only=true` the engine refuses every network
+transfer, including a refresh. `engine.prepare()` (or `standard-asr prepare …`)
+remains the **warm-up** hook: it loads the model into memory, acquiring first
+only when the cache is cold and downloads are allowed.
 
 ## Streaming
 

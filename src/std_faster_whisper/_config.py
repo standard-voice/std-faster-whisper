@@ -85,6 +85,7 @@ class FasterWhisperConfig(
 
     model_path: str | None = Field(
         default=None,
+        min_length=1,
         description=(
             "Optional local checkpoint directory overriding the preset's model "
             "(spec IC.7 weights/path). The model is selected by the entry-point "

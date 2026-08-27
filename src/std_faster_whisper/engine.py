@@ -32,6 +32,7 @@ from standard_asr import (
 )
 from standard_asr.audio.format import AudioFormat
 from standard_asr.contract.artifacts import (
+    ARTIFACT_INCOMPLETE,
     ARTIFACT_MISSING,
     ARTIFACT_READY,
     ArtifactContext,
@@ -55,10 +56,10 @@ from standard_asr.engine import (
     DeclaredEngineMetadata,
     Diagnostic,
     EngineBase,
+    Mode,
     PreparedAudio,
 )
 from standard_asr.runtime.downloads import allow_downloads, resolve_download_root
-from standard_asr.runtime.gating import Mode
 
 from ._artifacts import (
     HUB_ARTIFACT_ID,
@@ -225,12 +226,20 @@ class FasterWhisperASR(EngineBase):
             mode=mode, applicable=True, requirements=(requirement,)
         )
         if requirement.state != ARTIFACT_READY:
-            if config.model_path is not None and requirement.state == ARTIFACT_MISSING:
+            if config.model_path is not None and requirement.state in (
+                ARTIFACT_MISSING,
+                ARTIFACT_INCOMPLETE,
+            ):
+                # The status check already ran and answered (the path is
+                # absent, a file, or provably not a complete bundle); the
+                # loader would only turn that knowledge into an opaque native
+                # failure -- or a silent tokenizer Hub fetch.
                 raise ArtifactUnavailableError(
-                    f"The configured model_path {config.model_path!r} does not exist.",
-                    reason="missing",
+                    f"The configured model_path {config.model_path!r} is not a "
+                    f"usable CTranslate2 bundle (state: {requirement.state}).",
+                    reason=cast("Any", requirement.state),
                     report=report,
-                    hint="Provide the CTranslate2 directory or unset model_path.",
+                    hint="Provide the complete CTranslate2 directory or unset model_path.",
                 )
             if config.model_path is None and local_only:
                 raise ArtifactUnavailableError(
@@ -259,7 +268,7 @@ class FasterWhisperASR(EngineBase):
         # path uses the same canonical form status inspected -- expanding only
         # on the status side would hand a tilde path to the Hub as a repo id.
         if config.model_path is not None:
-            model_source = str(normalized_model_path(config))
+            model_source = str(normalized_model_path(config.model_path))
         else:
             model_source = type(self).model_size
         token = config.hf_token.get_secret_value() if config.hf_token is not None else None
@@ -285,7 +294,7 @@ class FasterWhisperASR(EngineBase):
                 # The loader was the allowed implicit acquisition path. An
                 # access rejection carries its discovered action (the reason
                 # comes from the blocker, not from which code path noticed).
-                raise_for_gated_source(exc, type(self).model_size)
+                raise_for_gated_source(exc, type(self).model_size, report)
                 raise ArtifactAcquisitionError(
                     f"First-use acquisition of the {type(self).model_size} "
                     f"model failed: {type(exc).__name__}.",
@@ -306,6 +315,7 @@ class FasterWhisperASR(EngineBase):
         explicit artifact-only acquisition is :meth:`acquire_artifacts`.
 
         Raises:
+            DiscoveryError: If the faster-whisper library is not installed.
             ArtifactUnavailableError: If required artifacts are missing and
                 cannot be acquired under the current policy.
             ArtifactAcquisitionError: If an allowed acquisition attempt fails.
@@ -492,8 +502,6 @@ class FasterWhisperASR(EngineBase):
             # Whole-input path: seed the window so _produce decodes it directly.
             session.feed(_prepared_to_pcm(prepared_audio))
         return session
-
-
 
 
 def _prepared_to_pcm(prepared: PreparedAudio) -> bytes:

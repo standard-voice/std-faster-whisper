@@ -33,6 +33,7 @@ from standard_asr.contract.artifacts import (
     ArtifactAction,
     ArtifactProgress,
     ArtifactProgressCallback,
+    ArtifactReport,
     ArtifactRequirement,
 )
 from standard_asr.contract.exceptions import ArtifactAcquisitionError
@@ -52,6 +53,22 @@ _COMMIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 
 #: The file WhisperModel requires at the root of a CTranslate2 directory.
 _CT2_MODEL_FILE = "model.bin"
+#: Without this file, upstream falls back to Tokenizer.from_pretrained -- a
+#: Hub fetch that bypasses local_files_only AND the global download toggle --
+#: so a directory lacking it is not offline-ready.
+_CT2_TOKENIZER_FILE = "tokenizer.json"
+
+
+def _bundle_complete(root: Path) -> bool:
+    """Return whether a directory is a complete offline-loadable CT2 bundle.
+
+    Args:
+        root: Candidate CTranslate2 directory.
+
+    Returns:
+        ``True`` when both the recognizer and the tokenizer are present.
+    """
+    return (root / _CT2_MODEL_FILE).is_file() and (root / _CT2_TOKENIZER_FILE).is_file()
 
 
 def disable_tqdm_monitor_thread() -> None:
@@ -75,7 +92,7 @@ def disable_tqdm_monitor_thread() -> None:
         pass
 
 
-def normalized_model_path(config: FasterWhisperConfig) -> Path:
+def normalized_model_path(model_path: str) -> Path:
     """Return the operator ``model_path`` in its one canonical absolute form.
 
     Status inspection and the loader MUST agree on this form: expanding only
@@ -83,13 +100,12 @@ def normalized_model_path(config: FasterWhisperConfig) -> Path:
     hands the raw string to the Hub as a repo id.
 
     Args:
-        config: Resolved engine configuration with ``model_path`` set.
+        model_path: The configured local checkpoint path.
 
     Returns:
         The expanded, resolved path.
     """
-    assert config.model_path is not None
-    return Path(config.model_path).expanduser().resolve()
+    return Path(model_path).expanduser().resolve()
 
 
 def _revision_is_pinned(revision: str | None) -> bool:
@@ -139,9 +155,6 @@ def _resolve_cached_snapshot(
     """
     try:
         from faster_whisper import download_model  # pyright: ignore[reportMissingImports]
-        from huggingface_hub.errors import (  # pyright: ignore[reportMissingModuleSource]
-            LocalEntryNotFoundError,
-        )
     except Exception:
         return ARTIFACT_UNKNOWN, None
 
@@ -158,9 +171,11 @@ def _resolve_cached_snapshot(
                 use_auth_token=token,
             ),
         )
-    except LocalEntryNotFoundError:
-        # The documented not-in-cache outcome of an offline resolution: this
-        # is the one failure that is reliable evidence of a missing snapshot.
+    except FileNotFoundError:
+        # The documented not-in-cache outcome of an offline resolution
+        # (upstream LocalEntryNotFoundError subclasses FileNotFoundError, so
+        # this classification needs no fragile hub import): reliable evidence
+        # of a missing snapshot. A PermissionError is deliberately NOT here.
         return ARTIFACT_MISSING, None
     except Exception:
         # Anything else (an unreadable cache, a permission failure, a stalled
@@ -170,9 +185,9 @@ def _resolve_cached_snapshot(
     # A relative download_root yields a relative snapshot path; the report's
     # location field requires (and callers deserve) the absolute form.
     snapshot = Path(resolved).expanduser().resolve()
-    if not (snapshot / _CT2_MODEL_FILE).is_file():
-        # The snapshot directory resolved but the recognizer file is not in
-        # it: a detectable interrupted acquisition.
+    if not _bundle_complete(snapshot):
+        # The snapshot directory resolved but the bundle is not complete: a
+        # detectable interrupted acquisition.
         return ARTIFACT_INCOMPLETE, snapshot
     return ARTIFACT_READY, snapshot
 
@@ -186,7 +201,8 @@ def _local_path_requirement(config: FasterWhisperConfig) -> ArtifactRequirement:
     Returns:
         The single logical requirement for the operator-provided directory.
     """
-    path = normalized_model_path(config)
+    assert config.model_path is not None
+    path = normalized_model_path(config.model_path)
     if not path.exists():
         state = ARTIFACT_MISSING
         message = (
@@ -194,17 +210,28 @@ def _local_path_requirement(config: FasterWhisperConfig) -> ArtifactRequirement:
             "(the configured model_path), or unset model_path to use the "
             "preset's Hub model."
         )
-    elif (path / _CT2_MODEL_FILE).is_file():
+    elif path.is_file():
+        # Pointing model_path at a file (for example model.bin itself) would
+        # make the upstream loader treat the absolute path as a Hub repo id.
+        state = ARTIFACT_INCOMPLETE
+        message = (
+            f"The configured model_path {path} is a file; point it at the "
+            "converted CTranslate2 DIRECTORY containing model.bin and "
+            "tokenizer.json."
+        )
+    elif _bundle_complete(path):
         state = ARTIFACT_READY
         message = None
     else:
-        # The path exists but lacks the recognizer file; unknown never means
-        # ready, and the operator still gets a concrete next step.
-        state = ARTIFACT_UNKNOWN
+        # The directory exists but the bundle is provably not complete (the
+        # loader requires model.bin, and a missing tokenizer.json triggers a
+        # silent Hub fetch past every download gate). This check already ran
+        # and answered, so the state is incomplete, not unknown.
+        state = ARTIFACT_INCOMPLETE
         message = (
-            f"The configured model_path {path} exists but contains no "
-            f"{_CT2_MODEL_FILE}; point it at the converted CTranslate2 "
-            "directory itself."
+            f"The configured model_path {path} lacks {_CT2_MODEL_FILE} "
+            f"and/or {_CT2_TOKENIZER_FILE}; convert with "
+            "--copy_files tokenizer.json, or point at the complete directory."
         )
 
     return ArtifactRequirement(
@@ -284,7 +311,11 @@ def status_requirement(config: FasterWhisperConfig, model_size: str) -> Artifact
     return _hub_requirement(config, model_size)
 
 
-def raise_for_gated_source(exc: BaseException, model_size: str) -> None:
+def raise_for_gated_source(
+    exc: BaseException,
+    model_size: str,
+    report: object | None = None,
+) -> None:
     """Translate a gated or unauthenticated Hub rejection into actions.
 
     Shared by the explicit acquisition hook and the implicit first-use path:
@@ -294,6 +325,7 @@ def raise_for_gated_source(exc: BaseException, model_size: str) -> None:
     Args:
         exc: The native failure raised by the Hub client.
         model_size: The preset's upstream weights id, for the message.
+        report: The preflight report to attach, when the caller has one.
 
     Returns:
         None when the failure is not an access problem.
@@ -314,6 +346,7 @@ def raise_for_gated_source(exc: BaseException, model_size: str) -> None:
         raise ArtifactAcquisitionError(
             f"The {model_size} model repository is gated.",
             reason="action_required",
+            report=cast("ArtifactReport | None", report),
             required_actions=(
                 ArtifactAction(
                     kind=ARTIFACT_ACTION_REQUEST_ACCESS,
@@ -330,6 +363,7 @@ def raise_for_gated_source(exc: BaseException, model_size: str) -> None:
         raise ArtifactAcquisitionError(
             f"The {model_size} model repository rejected the request as unauthenticated.",
             reason="action_required",
+            report=cast("ArtifactReport | None", report),
             required_actions=(
                 ArtifactAction(
                     kind=ARTIFACT_ACTION_AUTHENTICATE,
@@ -371,8 +405,7 @@ def acquire(
     """
     if config.local_files_only or not allow_downloads():
         raise ArtifactAcquisitionError(
-            "Acquisition needs a network transfer, and downloads are disabled "
-            "for this engine.",
+            "Acquisition needs a network transfer, and downloads are disabled for this engine.",
             reason="downloads_disabled",
             hint=(
                 "Unset local_files_only and set STANDARD_ASR_ALLOW_DOWNLOAD=1 "

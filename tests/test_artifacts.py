@@ -46,6 +46,7 @@ def _snapshot_dir(tmp_path: Path, sha: str = PINNED) -> Path:
     snapshot = tmp_path / "snapshots" / sha
     snapshot.mkdir(parents=True)
     (snapshot / "model.bin").write_bytes(b"\x00" * 64)
+    (snapshot / "tokenizer.json").write_text("{}")
     return snapshot
 
 
@@ -53,6 +54,7 @@ def _ct2_dir(tmp_path: Path) -> Path:
     root = tmp_path / "local-ct2"
     root.mkdir()
     (root / "model.bin").write_bytes(b"\x00" * 16)
+    (root / "tokenizer.json").write_text("{}")
     return root
 
 
@@ -120,7 +122,7 @@ def test_hub_ready_cache_reports_location_size_and_commit(
     assert requirement.can_acquire_now is False
     assert requirement.acquisition_blocker is None
     assert requirement.location == snapshot
-    assert requirement.size_bytes == 64
+    assert requirement.size_bytes == 66
     # The commit is read off the Hugging Face snapshots/<sha> layout.
     assert requirement.artifact_version == PINNED
 
@@ -176,20 +178,57 @@ def test_model_path_ready_directory(
     (requirement,) = TinyASR(model_path=str(local)).artifact_status().requirements
     assert requirement.state == ARTIFACT_READY
     assert requirement.location == local
-    assert requirement.size_bytes == 16
+    assert requirement.size_bytes == 18
 
 
-def test_model_path_without_model_file_is_unknown_with_guidance(
+def test_model_path_without_model_file_is_incomplete_with_guidance(
     fake_faster_whisper: type[FakeWhisperModel], tmp_path: Path
 ) -> None:
-    # The most common operator mistake (pointing one level too high) gets the
-    # same concrete next step as an absent path, not a bare unsupported.
+    # The most common operator mistake (pointing one level too high) is
+    # provably not a complete bundle -- the check already ran and answered,
+    # so the state is incomplete (not unknown), with a concrete next step.
     (requirement,) = TinyASR(model_path=str(tmp_path)).artifact_status().requirements
-    assert requirement.state == ARTIFACT_UNKNOWN
+    assert requirement.state == "incomplete"
     assert requirement.acquisition_blocker == "action_required"
     (action,) = requirement.required_actions
     assert action.kind == "provide_artifacts"
     assert "model.bin" in action.message
+
+
+def test_model_path_pointing_at_a_file_is_incomplete(
+    fake_faster_whisper: type[FakeWhisperModel], tmp_path: Path
+) -> None:
+    # A file path would make the upstream loader treat the absolute path as a
+    # Hub repo id; status catches it with directions to the directory.
+    target = tmp_path / "model.bin"
+    target.write_bytes(b"\x00")
+    (requirement,) = TinyASR(model_path=str(target)).artifact_status().requirements
+    assert requirement.state == "incomplete"
+    (action,) = requirement.required_actions
+    assert "DIRECTORY" in action.message
+
+
+def test_model_path_missing_tokenizer_is_incomplete(
+    fake_faster_whisper: type[FakeWhisperModel], tmp_path: Path
+) -> None:
+    # Without tokenizer.json upstream silently fetches it from the Hub past
+    # every download gate, so the bundle is not offline-ready.
+    root = tmp_path / "converted"
+    root.mkdir()
+    (root / "model.bin").write_bytes(b"\x00")
+    (requirement,) = TinyASR(model_path=str(root)).artifact_status().requirements
+    assert requirement.state == "incomplete"
+
+
+def test_prepare_incomplete_model_path_is_unavailable(
+    fake_faster_whisper: type[FakeWhisperModel], tmp_path: Path
+) -> None:
+    # The guard translates the already-answered incompleteness instead of
+    # letting the loader turn it into an opaque engine fault.
+    with pytest.raises(ArtifactUnavailableError) as exc_info:
+        TinyASR(model_path=str(tmp_path)).prepare()
+    assert exc_info.value.reason == "incomplete"
+    assert exc_info.value.report.readiness == ARTIFACTS_UNAVAILABLE
 
 
 # --------------------------------------------------------------------------- #
@@ -396,6 +435,7 @@ def test_partial_snapshot_reports_incomplete_and_pull_repairs(
 
     def _complete_download() -> None:
         (partial / "model.bin").write_bytes(b"\x00" * 64)
+        (partial / "tokenizer.json").write_text("{}")
 
     FakeHubCache.on_download = _complete_download
     repaired = TinyASR().acquire_artifacts()
@@ -477,6 +517,7 @@ def test_tilde_model_path_reaches_the_loader_expanded(
     local = tmp_path / "ct2"
     local.mkdir()
     (local / "model.bin").write_bytes(b"\x00")
+    (local / "tokenizer.json").write_text("{}")
     engine = TinyASR(model_path="~/ct2")
     (requirement,) = engine.artifact_status().requirements
     assert requirement.state == ARTIFACT_READY

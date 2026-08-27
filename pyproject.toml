@@ -24,9 +24,17 @@ dependencies = [
     # CTranslate2). A thin adapter tracks it via this version pin -- see
     # docs/STANDARD_ASR_FINDINGS.md for the adapter-vs-fork rationale.
     "faster-whisper>=1.1,<2",
+    # The artifact status/acquisition paths import huggingface_hub directly
+    # (error classes for access translation); 0.23 is the floor where the
+    # public errors module exists. faster-whisper pulls it in anyway; this pin
+    # makes the direct import an honest, declared dependency.
+    "huggingface-hub>=0.23",
     # The protocol this plugin implements. Pinned to the main branch until
-    # standard-asr cuts its first PyPI release; swap to a version specifier
-    # (>=0.1.0) at that point.
+    # standard-asr cuts its first PyPI release; swap to a version specifier at
+    # that point. MERGE ORDER: this branch implements the protocol 1.1
+    # artifact lifecycle, which `main` gains only when the core branch
+    # `feat/model-artifact-lifecycle` (0.2.0) lands -- merge the core first,
+    # then repin uv.lock here, or this plugin fails to import.
     "standard-asr @ git+https://github.com/standard-voice/standard_asr.git@main",
 ]
 

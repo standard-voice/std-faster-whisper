@@ -56,6 +56,7 @@ def _ct2_dir(tmp_path_factory: pytest.TempPathFactory) -> None:
     global CT2_DIR
     root = tmp_path_factory.mktemp("ct2")
     (root / "model.bin").write_bytes(b"\x00")
+    (root / "tokenizer.json").write_text("{}")
     CT2_DIR = str(root)
 
 
