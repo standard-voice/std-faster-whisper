@@ -149,7 +149,7 @@ class FasterWhisperStreamingSession(TranscriptionSession):
             in-progress tail, ``progress`` heartbeats carrying the audio cursor,
             and a terminal ``done``.
         """
-        self._engine.ensure_loaded()
+        self._engine.ensure_loaded(mode="streaming")
         from standard_asr.contract.params import WordTimestampGranularity
 
         want_words = self._params.word_timestamps == WordTimestampGranularity.WORD

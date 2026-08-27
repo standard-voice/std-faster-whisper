@@ -179,13 +179,17 @@ def test_model_path_ready_directory(
     assert requirement.size_bytes == 16
 
 
-def test_model_path_without_model_file_is_unknown(
+def test_model_path_without_model_file_is_unknown_with_guidance(
     fake_faster_whisper: type[FakeWhisperModel], tmp_path: Path
 ) -> None:
+    # The most common operator mistake (pointing one level too high) gets the
+    # same concrete next step as an absent path, not a bare unsupported.
     (requirement,) = TinyASR(model_path=str(tmp_path)).artifact_status().requirements
     assert requirement.state == ARTIFACT_UNKNOWN
-    assert requirement.acquisition_blocker == "unsupported"
-    assert requirement.required_actions == ()
+    assert requirement.acquisition_blocker == "action_required"
+    (action,) = requirement.required_actions
+    assert action.kind == "provide_artifacts"
+    assert "model.bin" in action.message
 
 
 # --------------------------------------------------------------------------- #
@@ -211,16 +215,44 @@ def test_pull_acquires_and_reports_ready(
     assert phases[-1] == "finalizing"
 
 
+def _gated_error() -> Exception:
+    import httpx
+    from huggingface_hub.errors import GatedRepoError
+
+    response = httpx.Response(403, request=httpx.Request("GET", "https://huggingface.co/x"))
+    return GatedRepoError("gated", response=response)
+
+
+def _unauthorized_error() -> Exception:
+    import httpx
+    from huggingface_hub.errors import HfHubHTTPError
+
+    response = httpx.Response(401, request=httpx.Request("GET", "https://huggingface.co/x"))
+    return HfHubHTTPError("401 unauthorized", response=response)
+
+
 def test_pull_gated_repo_reports_request_access(
     fake_faster_whisper: type[FakeWhisperModel],
 ) -> None:
-    gated = type("GatedRepoError", (Exception,), {})
-    FakeHubCache.raise_on_download = gated("gated")
+    # The REAL upstream error class: name-based matching would silently stop
+    # working on a rename or subclass.
+    FakeHubCache.raise_on_download = _gated_error()
     with pytest.raises(ArtifactAcquisitionError) as exc_info:
         TinyASR().acquire_artifacts()
     assert exc_info.value.reason == "action_required"
     (action,) = exc_info.value.required_actions
     assert action.kind == "request_access"
+
+
+def test_pull_unauthenticated_repo_reports_authenticate(
+    fake_faster_whisper: type[FakeWhisperModel],
+) -> None:
+    FakeHubCache.raise_on_download = _unauthorized_error()
+    with pytest.raises(ArtifactAcquisitionError) as exc_info:
+        TinyASR().acquire_artifacts()
+    assert exc_info.value.reason == "action_required"
+    (action,) = exc_info.value.required_actions
+    assert action.kind == "authenticate"
 
 
 def test_pull_native_failure_is_failed_with_cause(
@@ -341,3 +373,176 @@ def test_acquire_hook_ignores_a_target_set_without_the_hub_id(
 
     TinyASR()._acquire_artifacts(ArtifactContext(mode="batch"), (), False, None)
     assert FakeHubCache.download_calls == 0
+
+
+# --------------------------------------------------------------------------- #
+# Round-1 review regressions: completeness, policy, path canonicalization
+# --------------------------------------------------------------------------- #
+def test_partial_snapshot_reports_incomplete_and_pull_repairs(
+    fake_faster_whisper: type[FakeWhisperModel], tmp_path: Path
+) -> None:
+    # Upstream resolution returns an existing snapshot directory WITHOUT
+    # verifying its contents, so an interrupted download resolves; readiness
+    # must come from the completeness check, and pull must be able to repair.
+    partial = tmp_path / "snapshots" / PINNED
+    partial.mkdir(parents=True)
+    (partial / "config.json").write_text("{}")  # model.bin never arrived
+    FakeHubCache.resolved_path = str(partial)
+    report = TinyASR().artifact_status()
+    assert report.readiness == ARTIFACTS_UNAVAILABLE
+    (requirement,) = report.requirements
+    assert requirement.state == "incomplete"
+    assert requirement.can_acquire_now is True
+
+    def _complete_download() -> None:
+        (partial / "model.bin").write_bytes(b"\x00" * 64)
+
+    FakeHubCache.on_download = _complete_download
+    repaired = TinyASR().acquire_artifacts()
+    assert repaired.readiness == ARTIFACTS_READY
+    assert FakeHubCache.download_calls == 1
+
+
+def test_empty_snapshot_reports_incomplete(
+    fake_faster_whisper: type[FakeWhisperModel], tmp_path: Path
+) -> None:
+    empty = tmp_path / "snapshots" / PINNED
+    empty.mkdir(parents=True)
+    FakeHubCache.resolved_path = str(empty)
+    (requirement,) = TinyASR().artifact_status().requirements
+    assert requirement.state == "incomplete"
+    assert requirement.size_bytes == 0
+
+
+def test_refresh_respects_engine_local_files_only(
+    fake_faster_whisper: type[FakeWhisperModel], tmp_path: Path
+) -> None:
+    # local_files_only is the engine's own offline policy; the core template
+    # only sees the global toggle, so the hook must self-gate the refresh.
+    FakeHubCache.resolved_path = str(_snapshot_dir(tmp_path))
+    with pytest.raises(ArtifactAcquisitionError) as exc_info:
+        TinyASR(local_files_only=True).acquire_artifacts(refresh=True)
+    assert exc_info.value.reason == "downloads_disabled"
+    assert FakeHubCache.download_calls == 0
+
+
+def test_relative_download_root_yields_an_absolute_location(
+    fake_faster_whisper: type[FakeWhisperModel],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A relative download_root passes through resolution unchanged upstream;
+    # the report's location must still be absolute (the model validator
+    # rejects a relative path, which previously escaped as a raw
+    # ValidationError).
+    monkeypatch.chdir(tmp_path)
+    snapshot = _snapshot_dir(tmp_path)
+    FakeHubCache.resolved_path = str(snapshot.relative_to(tmp_path))
+    (requirement,) = TinyASR(download_root="models").artifact_status().requirements
+    assert requirement.state == ARTIFACT_READY
+    assert requirement.location is not None and requirement.location.is_absolute()
+
+
+def test_unreadable_cache_reports_unknown_not_missing(
+    fake_faster_whisper: type[FakeWhisperModel],
+) -> None:
+    # A permission failure is not evidence of absence: claiming missing would
+    # tell an offline operator to enable downloads for a permissions bug.
+    FakeHubCache.raise_on_resolve = PermissionError("refs unreadable")
+    (requirement,) = TinyASR().artifact_status().requirements
+    assert requirement.state == ARTIFACT_UNKNOWN
+    assert requirement.acquisition_blocker is None  # downloads allowed: still runnable
+
+
+def test_warm_cache_with_branch_revision_reports_resolved_commit(
+    fake_faster_whisper: type[FakeWhisperModel], tmp_path: Path
+) -> None:
+    # Two engines resolving the same snapshot must report the same version:
+    # the resolved commit wins over the configured mutable reference, so a
+    # refresh that moves the branch is observable through this field.
+    FakeHubCache.resolved_path = str(_snapshot_dir(tmp_path))
+    (requirement,) = TinyASR(revision="main").artifact_status().requirements
+    assert requirement.source_is_mutable is True
+    assert requirement.artifact_version == PINNED
+
+
+def test_tilde_model_path_reaches_the_loader_expanded(
+    fake_faster_whisper: type[FakeWhisperModel],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Status and the loader must agree on the canonical path form: expanding
+    # only on the status side would hand '~/x' to the Hub as a repo id.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    local = tmp_path / "ct2"
+    local.mkdir()
+    (local / "model.bin").write_bytes(b"\x00")
+    engine = TinyASR(model_path="~/ct2")
+    (requirement,) = engine.artifact_status().requirements
+    assert requirement.state == ARTIFACT_READY
+    engine.prepare()
+    assert fake_faster_whisper.last_init_kwargs["model_size_or_path"] == str(local)
+
+
+def test_transcribe_propagates_artifact_error_unwrapped(
+    fake_faster_whisper: type[FakeWhisperModel], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The R7 exemption end to end: an availability failure inside the batch
+    # pipeline reaches the caller as the artifact error, never wrapped into
+    # TranscriptionError.
+    import numpy as np
+
+    monkeypatch.setenv("STANDARD_ASR_ALLOW_DOWNLOAD", "0")
+    with pytest.raises(ArtifactUnavailableError):
+        TinyASR().transcribe((np.zeros(16000, dtype=np.float32), 16000))
+
+
+def test_streaming_session_emits_artifact_unavailable_terminal(
+    fake_faster_whisper: type[FakeWhisperModel], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The streaming mapping end to end: the session's producer translates the
+    # availability failure into the dedicated terminal code, not engine_error.
+    from standard_asr import SyncSession
+    from standard_asr.audio.format import AudioFormat
+
+    monkeypatch.setenv("STANDARD_ASR_ALLOW_DOWNLOAD", "0")
+    engine = TinyASR()
+    session = engine.start_transcription(
+        audio_format=AudioFormat(encoding="pcm_s16le", sample_rate=16000, channels=1)
+    )
+    with SyncSession(session) as sync:
+        events = list(sync)
+    (error,) = [event for event in events if event.type == "error"]
+    assert error.code == "artifact_unavailable"
+    assert error.recoverable is False
+
+
+def test_first_use_gated_repo_reports_request_access(
+    fake_faster_whisper: type[FakeWhisperModel],
+) -> None:
+    # The reason comes from the discovered blocker, not from which code path
+    # noticed it: the IMPLICIT first-use load carries the same action as pull.
+    fake_faster_whisper.raise_on_init = _gated_error()
+    with pytest.raises(ArtifactAcquisitionError) as exc_info:
+        TinyASR().prepare()
+    assert exc_info.value.reason == "action_required"
+    (action,) = exc_info.value.required_actions
+    assert action.kind == "request_access"
+
+
+def test_gated_translation_degrades_without_hub_errors_module(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import builtins
+
+    from std_faster_whisper._artifacts import raise_for_gated_source
+
+    real_import = builtins.__import__
+
+    def _import(name: str, *a: object, **k: object) -> object:
+        if name.startswith("huggingface_hub"):
+            raise ImportError("no huggingface_hub")
+        return real_import(name, *a, **k)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(builtins, "__import__", _import)
+    assert raise_for_gated_source(RuntimeError("x"), "tiny") is None

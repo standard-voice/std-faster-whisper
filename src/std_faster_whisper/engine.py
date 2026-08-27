@@ -36,6 +36,7 @@ from standard_asr.contract.artifacts import (
     ARTIFACT_READY,
     ArtifactContext,
     ArtifactProgressCallback,
+    ArtifactReport,
     ArtifactRequirement,
 )
 from standard_asr.contract.capabilities import DeclaredCapabilities
@@ -57,8 +58,18 @@ from standard_asr.engine import (
     PreparedAudio,
 )
 from standard_asr.runtime.downloads import allow_downloads, resolve_download_root
+from standard_asr.runtime.gating import Mode
 
-from ._artifacts import HUB_ARTIFACT_ID, acquire, status_requirement
+from ._artifacts import (
+    HUB_ARTIFACT_ID,
+    acquire,
+    normalized_model_path,
+    raise_for_gated_source,
+    status_requirement,
+)
+from ._artifacts import (
+    disable_tqdm_monitor_thread as _disable_tqdm_monitor_thread,
+)
 from ._config import FasterWhisperConfig, FasterWhisperParams, provider_kwargs
 from ._convert import convert_segments, safe_extra
 from ._metadata import (
@@ -134,17 +145,35 @@ class FasterWhisperASR(EngineBase):
             The underlying faster-whisper model instance.
 
         Raises:
-            DiscoveryError: If the library is missing or weights cannot load.
+            DiscoveryError: If the faster-whisper library is not installed.
+            ArtifactUnavailableError: If required artifacts cannot resolve
+                under the current policy.
+            ArtifactAcquisitionError: If an allowed first-use acquisition
+                fails.
+            TranscriptionError: If a locally available model fails to load.
         """
         self._ensure_model_loaded()
         assert self._model is not None  # _ensure_model_loaded raises otherwise
         return self._model
 
-    def ensure_loaded(self) -> None:
-        """Public alias for the lazy loader (used by the streaming session)."""
-        self._ensure_model_loaded()
+    def ensure_loaded(self, *, mode: Mode = "batch") -> None:
+        """Public alias for the lazy loader (used by the streaming session).
 
-    def _ensure_model_loaded(self) -> None:
+        Args:
+            mode: The inference mode whose path is loading; artifact errors
+                raised here carry a report resolved for this mode.
+
+        Raises:
+            DiscoveryError: If the faster-whisper library is not installed.
+            ArtifactUnavailableError: If required artifacts cannot resolve
+                under the current policy.
+            ArtifactAcquisitionError: If an allowed first-use acquisition
+                fails.
+            TranscriptionError: If a locally available model fails to load.
+        """
+        self._ensure_model_loaded(mode=mode)
+
+    def _ensure_model_loaded(self, *, mode: Mode = "batch") -> None:
         """Load the faster-whisper model lazily.
 
         The artifact guard runs first: a requirement the engine already knows
@@ -188,27 +217,36 @@ class FasterWhisperASR(EngineBase):
         local_only = config.local_files_only or not allow_downloads()
         # The artifact guard: the same cheap inspection that artifact_status()
         # reports. It decides whether a loader failure below counts as a failed
-        # implicit acquisition or an engine-execution fault.
+        # implicit acquisition or an engine-execution fault. The report on a
+        # guard error is built from this same requirement (no second
+        # inspection, no TOCTOU window) with the caller's mode.
         requirement = status_requirement(config, type(self).model_size)
+        report = ArtifactReport.from_requirements(
+            mode=mode, applicable=True, requirements=(requirement,)
+        )
         if requirement.state != ARTIFACT_READY:
             if config.model_path is not None and requirement.state == ARTIFACT_MISSING:
                 raise ArtifactUnavailableError(
                     f"The configured model_path {config.model_path!r} does not exist.",
                     reason="missing",
-                    report=self.artifact_status(),
+                    report=report,
                     hint="Provide the CTranslate2 directory or unset model_path.",
                 )
             if config.model_path is None and local_only:
                 raise ArtifactUnavailableError(
-                    f"The {type(self).model_size} model is not cached and "
-                    "downloads are disabled.",
+                    f"The {type(self).model_size} model is not fully cached "
+                    f"(state: {requirement.state}) and downloads are disabled.",
                     reason="downloads_disabled",
-                    report=self.artifact_status(),
+                    report=report,
                     hint=(
-                        "Run 'standard-asr pull' with downloads enabled, or set "
-                        "STANDARD_ASR_ALLOW_DOWNLOAD=1."
+                        "Enable downloads (unset local_files_only and set "
+                        "STANDARD_ASR_ALLOW_DOWNLOAD=1), then run "
+                        "'standard-asr pull'."
                     ),
                 )
+            # A model_path in state unknown is deliberately attempted: unknown
+            # is not evidence of unavailability (AR.2), and the loader is the
+            # authoritative check for an unrecognized local layout.
         # Spec IC.9 precedence: explicit download_root > STANDARD_ASR_MODEL_DIR >
         # library default (HF hub cache) > shared standard cache. faster-whisper
         # HAS a library default (download_root=None resolves via the HF cache),
@@ -217,8 +255,13 @@ class FasterWhisperASR(EngineBase):
         # re-download into a second cache.
         download_root = resolve_download_root(config.download_root, has_library_default=True)
         # Model selection is by preset (the class's model_size, spec IC.7); a
-        # local model_path is an optional weights/path override that wins.
-        model_source = config.model_path or type(self).model_size
+        # local model_path is an optional weights/path override that wins. The
+        # path uses the same canonical form status inspected -- expanding only
+        # on the status side would hand a tilde path to the Hub as a repo id.
+        if config.model_path is not None:
+            model_source = str(normalized_model_path(config))
+        else:
+            model_source = type(self).model_size
         token = config.hf_token.get_secret_value() if config.hf_token is not None else None
         try:
             self._model = WhisperModel(
@@ -239,12 +282,15 @@ class FasterWhisperASR(EngineBase):
             )
         except Exception as exc:
             if config.model_path is None and requirement.state != ARTIFACT_READY:
-                # The loader was the allowed implicit acquisition path and it
-                # did not produce a usable model.
+                # The loader was the allowed implicit acquisition path. An
+                # access rejection carries its discovered action (the reason
+                # comes from the blocker, not from which code path noticed).
+                raise_for_gated_source(exc, type(self).model_size)
                 raise ArtifactAcquisitionError(
                     f"First-use acquisition of the {type(self).model_size} "
                     f"model failed: {type(exc).__name__}.",
                     reason="failed",
+                    report=report,
                     hint="Run 'standard-asr pull' to acquire it explicitly.",
                 ) from exc
             raise TranscriptionError(
@@ -330,6 +376,10 @@ class FasterWhisperASR(EngineBase):
             A Standard ASR transcription result.
 
         Raises:
+            ArtifactUnavailableError: If required artifacts cannot resolve
+                under the current policy (an explicit R7 exemption).
+            ArtifactAcquisitionError: If an allowed first-use acquisition
+                fails (an explicit R7 exemption).
             TranscriptionError: If faster-whisper raises during inference. The
                 batch error contract (spec RT R7) requires an engine-execution
                 failure to surface as a portable ``TranscriptionError`` with the
@@ -444,22 +494,6 @@ class FasterWhisperASR(EngineBase):
         return session
 
 
-def _disable_tqdm_monitor_thread() -> None:
-    """Disable tqdm's auto-spawned monitor daemon thread (idempotent, best-effort).
-
-    Setting ``tqdm.monitor_interval = 0`` before any tqdm instance is created
-    prevents the persistent ``tqdm_monitor`` thread that would otherwise leak past
-    a session and trip ``check_sync_bridge``. Progress bars still render; only the
-    background stall-detector thread is suppressed. If tqdm is somehow absent or
-    already started its monitor, this is a no-op (it only ever *disables*).
-    """
-    try:
-        import tqdm
-
-        if tqdm.tqdm.monitor_interval != 0:
-            tqdm.tqdm.monitor_interval = 0
-    except Exception:
-        pass
 
 
 def _prepared_to_pcm(prepared: PreparedAudio) -> bytes:

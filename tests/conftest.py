@@ -130,7 +130,12 @@ class FakeHubCache:
 
     resolved_path: str | None = None
     download_target: str | None = None
+    #: Raised by a cache-only resolution (models an unreadable cache).
+    raise_on_resolve: BaseException | None = None
     raise_on_download: BaseException | None = None
+    #: Optional side effect run by an online call (models the transfer
+    #: materializing files, e.g. completing a partial snapshot).
+    on_download: Any = None
     last_kwargs: dict[str, Any] = {}
     #: Kwargs of the last ONLINE call only (a later cache-only status query
     #: overwrites ``last_kwargs``, so acquisition tests read this one).
@@ -141,7 +146,9 @@ class FakeHubCache:
     def reset(cls) -> None:
         cls.resolved_path = None
         cls.download_target = None
+        cls.raise_on_resolve = None
         cls.raise_on_download = None
+        cls.on_download = None
         cls.last_kwargs = {}
         cls.last_download_kwargs = {}
         cls.download_calls = 0
@@ -165,13 +172,22 @@ def _fake_download_model(
         "use_auth_token": use_auth_token,
     }
     if local_files_only:
+        if FakeHubCache.raise_on_resolve is not None:
+            raise FakeHubCache.raise_on_resolve
         if FakeHubCache.resolved_path is None:
-            raise RuntimeError("model is not cached locally")
+            # Mirror the real helper: not-in-cache surfaces as the documented
+            # LocalEntryNotFoundError, the one failure the plugin may read as
+            # reliable evidence of a missing snapshot.
+            from huggingface_hub.errors import LocalEntryNotFoundError
+
+            raise LocalEntryNotFoundError("model is not cached locally")
         return FakeHubCache.resolved_path
     FakeHubCache.last_download_kwargs = dict(FakeHubCache.last_kwargs)
     FakeHubCache.download_calls += 1
     if FakeHubCache.raise_on_download is not None:
         raise FakeHubCache.raise_on_download
+    if FakeHubCache.on_download is not None:
+        FakeHubCache.on_download()
     if FakeHubCache.download_target is not None:
         FakeHubCache.resolved_path = FakeHubCache.download_target
     return FakeHubCache.resolved_path or "downloaded"
