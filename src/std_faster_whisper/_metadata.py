@@ -70,7 +70,7 @@ class FasterWhisperProperties(BaseProperties):
 
     engine_id: str = "faster-whisper"
     model_name: str = "large-v3"
-    protocol_version: str = "1.0.0"
+    protocol_version: str = "1.1.0"
     accepted_input: set[InputKind] = {
         InputKind.ARRAY,
         InputKind.ENCODED_FILE,

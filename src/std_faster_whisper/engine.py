@@ -31,18 +31,34 @@ from standard_asr import (
     TranscriptionSession,
 )
 from standard_asr.audio.format import AudioFormat
+from standard_asr.contract.artifacts import (
+    ARTIFACT_MISSING,
+    ARTIFACT_READY,
+    ArtifactContext,
+    ArtifactProgressCallback,
+    ArtifactRequirement,
+)
 from standard_asr.contract.capabilities import DeclaredCapabilities
+from standard_asr.contract.exceptions import (
+    ArtifactAcquisitionError,
+    ArtifactUnavailableError,
+    DiscoveryError,
+    TranscriptionError,
+)
+from standard_asr.contract.language import effective_language, normalize_bcp47
+from standard_asr.contract.params import ProviderParams, WordTimestampGranularity
 from standard_asr.engine import (
+    ArtifactDeclaration,
     BaseConfig,
     BaseProperties,
+    DeclaredEngineMetadata,
+    Diagnostic,
     EngineBase,
     PreparedAudio,
 )
-from standard_asr.contract.exceptions import DiscoveryError, TranscriptionError
-from standard_asr.contract.language import effective_language, normalize_bcp47
 from standard_asr.runtime.downloads import allow_downloads, resolve_download_root
-from standard_asr.contract.params import ProviderParams, WordTimestampGranularity
 
+from ._artifacts import HUB_ARTIFACT_ID, acquire, status_requirement
 from ._config import FasterWhisperConfig, FasterWhisperParams, provider_kwargs
 from ._convert import convert_segments, safe_extra
 from ._metadata import (
@@ -79,6 +95,17 @@ class FasterWhisperASR(EngineBase):
 
     properties: ClassVar[BaseProperties] = LargeV3Properties()
     declared_capabilities: ClassVar[DeclaredCapabilities] = DECLARED_CAPABILITIES
+    #: Static upper bounds over every supported config: the Hub presets support
+    #: explicit artifact-only acquisition (upstream ``download_model``) and can
+    #: also download inside ``WhisperModel(...)`` on first use. A ``model_path``
+    #: instance narrows both to an externally provided requirement dynamically.
+    declared_metadata: ClassVar[DeclaredEngineMetadata] = DeclaredEngineMetadata(
+        artifacts=ArtifactDeclaration(
+            acquisition_applicable=True,
+            supports_explicit_acquisition=True,
+            may_acquire_during_inference=True,
+        )
+    )
     provider_params_type: ClassVar[type[ProviderParams] | None] = FasterWhisperParams
     config_type: ClassVar[type[BaseConfig[str]] | None] = FasterWhisperConfig
 
@@ -120,8 +147,21 @@ class FasterWhisperASR(EngineBase):
     def _ensure_model_loaded(self) -> None:
         """Load the faster-whisper model lazily.
 
+        The artifact guard runs first: a requirement the engine already knows
+        cannot resolve under the current policy raises
+        ``ArtifactUnavailableError`` before any loader call, and a failed
+        allowed first-use acquisition raises ``ArtifactAcquisitionError``.
+        Every other load failure keeps the batch R7 ``TranscriptionError``
+        mapping (a present-but-unloadable model is an engine-execution fault,
+        not a pre-inference availability state the engine can prove).
+
         Raises:
-            DiscoveryError: If the library is missing or weights cannot load.
+            DiscoveryError: If the faster-whisper library is not installed.
+            ArtifactUnavailableError: If required artifacts are missing and
+                cannot be acquired under the current policy.
+            ArtifactAcquisitionError: If an allowed first-use acquisition
+                fails.
+            TranscriptionError: If a locally available model fails to load.
         """
         if self._model is not None:
             return
@@ -146,6 +186,29 @@ class FasterWhisperASR(EngineBase):
 
         config = cast(FasterWhisperConfig, self.config)
         local_only = config.local_files_only or not allow_downloads()
+        # The artifact guard: the same cheap inspection that artifact_status()
+        # reports. It decides whether a loader failure below counts as a failed
+        # implicit acquisition or an engine-execution fault.
+        requirement = status_requirement(config, type(self).model_size)
+        if requirement.state != ARTIFACT_READY:
+            if config.model_path is not None and requirement.state == ARTIFACT_MISSING:
+                raise ArtifactUnavailableError(
+                    f"The configured model_path {config.model_path!r} does not exist.",
+                    reason="missing",
+                    report=self.artifact_status(),
+                    hint="Provide the CTranslate2 directory or unset model_path.",
+                )
+            if config.model_path is None and local_only:
+                raise ArtifactUnavailableError(
+                    f"The {type(self).model_size} model is not cached and "
+                    "downloads are disabled.",
+                    reason="downloads_disabled",
+                    report=self.artifact_status(),
+                    hint=(
+                        "Run 'standard-asr pull' with downloads enabled, or set "
+                        "STANDARD_ASR_ALLOW_DOWNLOAD=1."
+                    ),
+                )
         # Spec IC.9 precedence: explicit download_root > STANDARD_ASR_MODEL_DIR >
         # library default (HF hub cache) > shared standard cache. faster-whisper
         # HAS a library default (download_root=None resolves via the HF cache),
@@ -161,7 +224,11 @@ class FasterWhisperASR(EngineBase):
             self._model = WhisperModel(
                 model_size_or_path=model_source,
                 device=config.device or "auto",
-                device_index=config.device_index,
+                device_index=(
+                    config.device_indices
+                    if config.device_indices is not None
+                    else config.device_index
+                ),
                 compute_type=config.compute_type,
                 cpu_threads=config.cpu_threads,
                 num_workers=config.num_workers,
@@ -171,21 +238,82 @@ class FasterWhisperASR(EngineBase):
                 use_auth_token=token,
             )
         except Exception as exc:
-            raise DiscoveryError(
-                "Failed to load faster-whisper model. If downloads are disabled, "
-                "set STANDARD_ASR_ALLOW_DOWNLOAD=1 or pre-download the model."
+            if config.model_path is None and requirement.state != ARTIFACT_READY:
+                # The loader was the allowed implicit acquisition path and it
+                # did not produce a usable model.
+                raise ArtifactAcquisitionError(
+                    f"First-use acquisition of the {type(self).model_size} "
+                    f"model failed: {type(exc).__name__}.",
+                    reason="failed",
+                    hint="Run 'standard-asr pull' to acquire it explicitly.",
+                ) from exc
+            raise TranscriptionError(
+                f"faster-whisper failed to load the model: {type(exc).__name__}."
             ) from exc
 
     def prepare(self) -> None:
-        """Preload model weights without transcribing (spec IC.11).
+        """Warm up the CTranslate2 model without transcribing (spec IC.11).
 
-        Idempotent and synchronous; self-checks the download policy via
-        :meth:`_ensure_model_loaded`.
+        Idempotent and synchronous. The native loader cannot separate
+        acquisition from loading, so a cold cache acquires on this path too
+        (under the same download policy and artifact errors as inference);
+        explicit artifact-only acquisition is :meth:`acquire_artifacts`.
 
         Raises:
-            DiscoveryError: If weights cannot be loaded.
+            ArtifactUnavailableError: If required artifacts are missing and
+                cannot be acquired under the current policy.
+            ArtifactAcquisitionError: If an allowed acquisition attempt fails.
+            TranscriptionError: If a locally available model fails to load.
         """
         self._ensure_model_loaded()
+
+    # ------------------------------------------------------------------ #
+    # Inference-artifact lifecycle (protocol 1.1)
+    # ------------------------------------------------------------------ #
+    def _artifact_requirements(
+        self,
+        context: ArtifactContext,
+    ) -> tuple[bool, tuple[ArtifactRequirement, ...], tuple[Diagnostic, ...]]:
+        """Report the recognizer bundle for the resolved config.
+
+        Batch and streaming share the same weights, so the closure does not
+        depend on the request context.
+
+        Args:
+            context: Resolved, best-effort-gated request context.
+
+        Returns:
+            One requirement: the Hub preset or the operator-provided path.
+        """
+        config = cast(FasterWhisperConfig, self.config)
+        return True, (status_requirement(config, type(self).model_size),), ()
+
+    def _acquire_artifacts(
+        self,
+        context: ArtifactContext,
+        requirements: tuple[ArtifactRequirement, ...],
+        refresh: bool,
+        progress: ArtifactProgressCallback | None,
+    ) -> None:
+        """Acquire the Hub preset with the upstream artifact-only downloader.
+
+        A ``model_path`` requirement is externally provided and never reaches
+        this hook (it can never be acquired and is never a refresh target).
+        The upstream downloader re-resolves a mutable revision on every online
+        call, so plain acquisition and refresh share one code path.
+
+        Args:
+            context: Resolved artifact context.
+            requirements: Runnable acquisition and refresh targets.
+            refresh: Whether mutable targets must be re-resolved.
+            progress: Serialized progress observer, if requested.
+
+        Returns:
+            None.
+        """
+        config = cast(FasterWhisperConfig, self.config)
+        if any(item.artifact_id == HUB_ARTIFACT_ID for item in requirements):
+            acquire(config, type(self).model_size, progress)
 
     # ------------------------------------------------------------------ #
     # Batch

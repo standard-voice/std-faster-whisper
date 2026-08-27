@@ -119,12 +119,72 @@ class FakeWhisperModel:
         return FakeWhisperModel.segments, FakeWhisperModel.info
 
 
+class FakeHubCache:
+    """Controls the fake ``download_model``: cache resolution + acquisition.
+
+    ``resolved_path`` is the local cache hit a ``local_files_only=True`` call
+    returns (``None`` = not cached, the call raises like the upstream helper).
+    An online call records itself, optionally raises, and can flip the cache
+    to ``download_target`` (simulating a completed acquisition).
+    """
+
+    resolved_path: str | None = None
+    download_target: str | None = None
+    raise_on_download: BaseException | None = None
+    last_kwargs: dict[str, Any] = {}
+    #: Kwargs of the last ONLINE call only (a later cache-only status query
+    #: overwrites ``last_kwargs``, so acquisition tests read this one).
+    last_download_kwargs: dict[str, Any] = {}
+    download_calls: int = 0
+
+    @classmethod
+    def reset(cls) -> None:
+        cls.resolved_path = None
+        cls.download_target = None
+        cls.raise_on_download = None
+        cls.last_kwargs = {}
+        cls.last_download_kwargs = {}
+        cls.download_calls = 0
+
+
+def _fake_download_model(
+    size_or_id: str,
+    output_dir: str | None = None,
+    local_files_only: bool = False,
+    cache_dir: str | None = None,
+    revision: str | None = None,
+    use_auth_token: str | bool | None = None,
+) -> str:
+    """Mirror the upstream ``download_model`` contract against ``FakeHubCache``."""
+    FakeHubCache.last_kwargs = {
+        "size_or_id": size_or_id,
+        "output_dir": output_dir,
+        "local_files_only": local_files_only,
+        "cache_dir": cache_dir,
+        "revision": revision,
+        "use_auth_token": use_auth_token,
+    }
+    if local_files_only:
+        if FakeHubCache.resolved_path is None:
+            raise RuntimeError("model is not cached locally")
+        return FakeHubCache.resolved_path
+    FakeHubCache.last_download_kwargs = dict(FakeHubCache.last_kwargs)
+    FakeHubCache.download_calls += 1
+    if FakeHubCache.raise_on_download is not None:
+        raise FakeHubCache.raise_on_download
+    if FakeHubCache.download_target is not None:
+        FakeHubCache.resolved_path = FakeHubCache.download_target
+    return FakeHubCache.resolved_path or "downloaded"
+
+
 @pytest.fixture
 def fake_faster_whisper(monkeypatch: pytest.MonkeyPatch) -> type[FakeWhisperModel]:
     """Install a fake ``faster_whisper`` module exposing ``FakeWhisperModel``.
 
     Returns the model class so tests can set ``segments`` / ``info`` / failure
-    behaviour before invoking the adapter.
+    behaviour before invoking the adapter. The module also carries the fake
+    ``download_model`` (backed by :class:`FakeHubCache`) that the artifact
+    status and acquisition paths import.
     """
     FakeWhisperModel.segments = []
     FakeWhisperModel.info = FakeInfo()
@@ -134,9 +194,11 @@ def fake_faster_whisper(monkeypatch: pytest.MonkeyPatch) -> type[FakeWhisperMode
     FakeWhisperModel.raise_on_transcribe = None
     FakeWhisperModel.transcribe_calls = 0
     FakeWhisperModel.segments_fn = None
+    FakeHubCache.reset()
 
     module = types.ModuleType("faster_whisper")
     module.WhisperModel = FakeWhisperModel  # type: ignore[attr-defined]
+    module.download_model = _fake_download_model  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "faster_whisper", module)
     return FakeWhisperModel
 
