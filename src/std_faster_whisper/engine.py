@@ -64,6 +64,7 @@ from standard_asr.runtime.downloads import allow_downloads, resolve_download_roo
 from ._artifacts import (
     HUB_ARTIFACT_ID,
     acquire,
+    mel_mismatch_requirement,
     normalized_model_path,
     raise_for_gated_source,
     status_requirement,
@@ -104,6 +105,17 @@ class FasterWhisperASR(EngineBase):
     #: ``model_size_or_path``). Overridden per preset; a local ``model_path``
     #: config override (spec IC.7 weights/path) still wins when set.
     model_size: ClassVar[str] = "large-v3"
+
+    #: Preset-declared bundle files beyond the loader-universal closure. The
+    #: 128-mel repos (large-v3, distil-large-v3, large-v3-turbo) ship
+    #: preprocessor_config.json and need it: without the file, upstream
+    #: silently builds an 80-mel feature extractor, and CTranslate2 then
+    #: rejects the mismatched features at the first request (the post-load
+    #: mel check turns that into an artifact error at load). The 80-mel repos
+    #: do not carry the file at all (verified across every curated repo), so
+    #: those presets override this with an empty tuple -- requiring it there
+    #: would report a complete download as forever incomplete.
+    required_bundle_files: ClassVar[tuple[str, ...]] = ("preprocessor_config.json",)
 
     properties: ClassVar[BaseProperties] = LargeV3Properties()
     declared_capabilities: ClassVar[DeclaredCapabilities] = DECLARED_CAPABILITIES
@@ -221,7 +233,9 @@ class FasterWhisperASR(EngineBase):
         # implicit acquisition or an engine-execution fault. The report on a
         # guard error is built from this same requirement (no second
         # inspection, no TOCTOU window) with the caller's mode.
-        requirement = status_requirement(config, type(self).model_size)
+        requirement = status_requirement(
+            config, type(self).model_size, type(self).required_bundle_files
+        )
         report = ArtifactReport.from_requirements(
             mode=mode, applicable=True, requirements=(requirement,)
         )
@@ -273,7 +287,7 @@ class FasterWhisperASR(EngineBase):
             model_source = type(self).model_size
         token = config.hf_token.get_secret_value() if config.hf_token is not None else None
         try:
-            self._model = WhisperModel(
+            model = WhisperModel(
                 model_size_or_path=model_source,
                 device=config.device or "auto",
                 device_index=(
@@ -305,6 +319,85 @@ class FasterWhisperASR(EngineBase):
             raise TranscriptionError(
                 f"faster-whisper failed to load the model: {type(exc).__name__}."
             ) from exc
+        if config.model_path is None and requirement.state != ARTIFACT_READY:
+            # The load above doubled as the implicit acquisition, and its
+            # internal downloader silently falls back to the local cache when
+            # the remote is unreachable -- so a load can succeed on the same
+            # incomplete bundle status just reported. Verify the acquisition
+            # postcondition before adopting the model. Only incomplete is
+            # positive evidence against the loaded model (the same resolution
+            # rule sees the directory the loader used, and it lacks closure
+            # files); unknown or missing after a successful load carries no
+            # such evidence (spec AR.2) -- the loader just succeeded.
+            after = status_requirement(
+                config, type(self).model_size, type(self).required_bundle_files
+            )
+            if after.state == ARTIFACT_INCOMPLETE:
+                raise ArtifactAcquisitionError(
+                    f"First-use acquisition of the {type(self).model_size} "
+                    f"model resolved without completing the bundle (state: "
+                    f"{after.state}); the source may be unreachable and the "
+                    "local cache incomplete.",
+                    reason="failed",
+                    report=ArtifactReport.from_requirements(
+                        mode=mode, applicable=True, requirements=(after,)
+                    ),
+                    hint="Run 'standard-asr pull' while the source is reachable.",
+                )
+        # The mel closure is only provable here: the loaded CT2 model
+        # self-describes its n_mels, while nothing on disk names it (the CT2
+        # config.json carries no feature size), so status cannot see that a
+        # bundle without preprocessor_config.json makes upstream silently
+        # build an 80-mel feature extractor for a 128-mel model. CT2 does
+        # reject the mismatched features -- loudly, at the first request,
+        # with a bare shape error (verified empirically); failing at load
+        # with the artifact diagnosis is the actionable form.
+        n_model = cast(Any, model).model.n_mels
+        n_features = cast(Any, model).feature_extractor.mel_filters.shape[0]
+        if n_model != n_features:
+            if config.model_path is not None:
+                hint = (
+                    "Reconvert with --copy_files preprocessor_config.json "
+                    "tokenizer.json, or point model_path at a matching bundle."
+                )
+            else:
+                # A plain pull cannot repair this: the disk closure looks
+                # ready, and the Hub cache never refetches a present file of
+                # the resolved commit -- the executable repair is removing
+                # the repository cache root (the blob store rebuilds a
+                # deleted snapshot pointer without a transfer).
+                hint = (
+                    "Remove the model's repository cache directory and run "
+                    "'standard-asr pull' again, or pin a revision whose "
+                    "content matches."
+                )
+            # The attached report must be the one that ESTABLISHED the
+            # unavailable state: the pre-load report said ready (the file
+            # closure cannot see mels), so rebuild it from this discovery --
+            # observed POST-load, because the loader's online resolution may
+            # have moved a mutable revision past the preflight's
+            # cache-resolved commit, and the action must name the snapshot
+            # the mismatch actually came from.
+            current = status_requirement(
+                config, type(self).model_size, type(self).required_bundle_files
+            )
+            mismatch = mel_mismatch_requirement(
+                config,
+                current,
+                model_n_mels=n_model,
+                extractor_n_mels=n_features,
+            )
+            raise ArtifactUnavailableError(
+                f"The loaded bundle computes {n_features}-mel features, but "
+                f"the model expects {n_model}: preprocessor_config.json is "
+                "missing or does not match this model.",
+                reason="incomplete",
+                report=ArtifactReport.from_requirements(
+                    mode=mode, applicable=True, requirements=(mismatch,)
+                ),
+                hint=hint,
+            )
+        self._model = model
 
     def prepare(self) -> None:
         """Warm up the CTranslate2 model without transcribing (spec IC.11).
@@ -342,7 +435,10 @@ class FasterWhisperASR(EngineBase):
             One requirement: the Hub preset or the operator-provided path.
         """
         config = cast(FasterWhisperConfig, self.config)
-        return True, (status_requirement(config, type(self).model_size),), ()
+        requirement = status_requirement(
+            config, type(self).model_size, type(self).required_bundle_files
+        )
+        return True, (requirement,), ()
 
     def _acquire_artifacts(
         self,
@@ -355,8 +451,10 @@ class FasterWhisperASR(EngineBase):
 
         A ``model_path`` requirement is externally provided and never reaches
         this hook (it can never be acquired and is never a refresh target).
-        The upstream downloader re-resolves a mutable revision on every online
-        call, so plain acquisition and refresh share one code path.
+        A refresh carries its own re-resolution evidence: the downloader
+        silently falls back to the local cache when the remote is
+        unreachable, so ``acquire`` verifies the source resolution itself
+        (spec AR.4).
 
         Args:
             context: Resolved artifact context.
@@ -369,7 +467,7 @@ class FasterWhisperASR(EngineBase):
         """
         config = cast(FasterWhisperConfig, self.config)
         if any(item.artifact_id == HUB_ARTIFACT_ID for item in requirements):
-            acquire(config, type(self).model_size, progress)
+            acquire(config, type(self).model_size, progress, refresh=refresh)
 
     # ------------------------------------------------------------------ #
     # Batch
@@ -549,6 +647,8 @@ class TinyASR(FasterWhisperASR):
     """The ``faster-whisper/tiny`` preset (smallest, fastest; for tests)."""
 
     model_size: ClassVar[str] = "tiny"
+    # An 80-mel repo: no preprocessor_config.json on the Hub.
+    required_bundle_files: ClassVar[tuple[str, ...]] = ()
     properties: ClassVar[BaseProperties] = TinyProperties()
 
 
@@ -556,6 +656,8 @@ class BaseASR(FasterWhisperASR):
     """The ``faster-whisper/base`` preset."""
 
     model_size: ClassVar[str] = "base"
+    # An 80-mel repo: no preprocessor_config.json on the Hub.
+    required_bundle_files: ClassVar[tuple[str, ...]] = ()
     properties: ClassVar[BaseProperties] = BaseModelProperties()
 
 
@@ -563,6 +665,8 @@ class SmallASR(FasterWhisperASR):
     """The ``faster-whisper/small`` preset."""
 
     model_size: ClassVar[str] = "small"
+    # An 80-mel repo: no preprocessor_config.json on the Hub.
+    required_bundle_files: ClassVar[tuple[str, ...]] = ()
     properties: ClassVar[BaseProperties] = SmallProperties()
 
 
@@ -570,6 +674,8 @@ class MediumASR(FasterWhisperASR):
     """The ``faster-whisper/medium`` preset."""
 
     model_size: ClassVar[str] = "medium"
+    # An 80-mel repo: no preprocessor_config.json on the Hub.
+    required_bundle_files: ClassVar[tuple[str, ...]] = ()
     properties: ClassVar[BaseProperties] = MediumProperties()
 
 

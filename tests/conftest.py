@@ -99,15 +99,33 @@ class FakeWhisperModel:
     last_transcribe_kwargs: dict[str, Any] = {}
     last_init_kwargs: dict[str, Any] = {}
     raise_on_init: BaseException | None = None
+    #: Optional side effect run by a successful init (models the implicit
+    #: acquisition inside the real loader materializing files).
+    on_init: Any = None
     raise_on_transcribe: BaseException | None = None
     transcribe_calls: int = 0
     #: Optional: (audio, kwargs) -> list[FakeSegment]; overrides `segments`.
     segments_fn: Any = None
 
+    #: The mel count the fake CT2 model self-describes (``model.n_mels``).
+    n_mels: int = 80
+    #: The mel count the fake feature extractor computes
+    #: (``feature_extractor.mel_filters.shape[0]``).
+    feature_size: int = 80
+
     def __init__(self, **kwargs: Any) -> None:
         if FakeWhisperModel.raise_on_init is not None:
             raise FakeWhisperModel.raise_on_init
         FakeWhisperModel.last_init_kwargs = kwargs
+        if FakeWhisperModel.on_init is not None:
+            FakeWhisperModel.on_init()
+        # Mirror the loaded-model surfaces the mel-closure check reads: the
+        # CT2 model self-describes n_mels, the feature extractor's filter
+        # bank has one row per computed mel.
+        self.model = types.SimpleNamespace(n_mels=FakeWhisperModel.n_mels)
+        self.feature_extractor = types.SimpleNamespace(
+            mel_filters=np.zeros((FakeWhisperModel.feature_size, 201), dtype=np.float32)
+        )
 
     def transcribe(self, source: Any, **kwargs: Any) -> tuple[list[FakeSegment], FakeInfo]:
         FakeWhisperModel.transcribe_calls += 1
@@ -193,6 +211,37 @@ def _fake_download_model(
     return FakeHubCache.resolved_path or "downloaded"
 
 
+class FakeHfApi:
+    """Controls the fake ``huggingface_hub.HfApi`` source metadata queries.
+
+    A refresh re-resolves the mutable revision through ``model_info``;
+    ``remote_sha`` is the commit the fake source answers with (``None``
+    models a source that names no commit), and ``raise_on_model_info``
+    models an unreachable or rejecting source.
+    """
+
+    remote_sha: str | None = None
+    raise_on_model_info: BaseException | None = None
+    model_info_calls: list[dict[str, Any]] = []
+    last_token: str | None = None
+
+    def __init__(self, token: str | None = None) -> None:
+        FakeHfApi.last_token = token
+
+    def model_info(self, repo_id: str, *, revision: str | None = None) -> Any:
+        FakeHfApi.model_info_calls.append({"repo_id": repo_id, "revision": revision})
+        if FakeHfApi.raise_on_model_info is not None:
+            raise FakeHfApi.raise_on_model_info
+        return types.SimpleNamespace(sha=FakeHfApi.remote_sha)
+
+    @classmethod
+    def reset(cls) -> None:
+        cls.remote_sha = None
+        cls.raise_on_model_info = None
+        cls.model_info_calls = []
+        cls.last_token = None
+
+
 @pytest.fixture
 def fake_faster_whisper(monkeypatch: pytest.MonkeyPatch) -> type[FakeWhisperModel]:
     """Install a fake ``faster_whisper`` module exposing ``FakeWhisperModel``.
@@ -207,15 +256,29 @@ def fake_faster_whisper(monkeypatch: pytest.MonkeyPatch) -> type[FakeWhisperMode
     FakeWhisperModel.last_transcribe_kwargs = {}
     FakeWhisperModel.last_init_kwargs = {}
     FakeWhisperModel.raise_on_init = None
+    FakeWhisperModel.on_init = None
+    FakeWhisperModel.n_mels = 80
+    FakeWhisperModel.feature_size = 80
     FakeWhisperModel.raise_on_transcribe = None
     FakeWhisperModel.transcribe_calls = 0
     FakeWhisperModel.segments_fn = None
     FakeHubCache.reset()
+    FakeHfApi.reset()
+
+    # Register the REAL utils submodule (the preset-to-repo size table)
+    # BEFORE the parent module is faked: a later dotted import short-circuits
+    # on this sys.modules entry, so the adapter's repo-id mapping runs against
+    # the genuine upstream table while everything behavioral stays faked.
+    import faster_whisper.utils  # noqa: F401
 
     module = types.ModuleType("faster_whisper")
     module.WhisperModel = FakeWhisperModel  # type: ignore[attr-defined]
     module.download_model = _fake_download_model  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "faster_whisper", module)
+
+    import huggingface_hub
+
+    monkeypatch.setattr(huggingface_hub, "HfApi", FakeHfApi)
     return FakeWhisperModel
 
 

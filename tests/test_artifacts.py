@@ -29,7 +29,7 @@ from standard_asr.engine import NO_ARTIFACT_ACQUISITION
 
 from std_faster_whisper import FasterWhisperASR, TinyASR
 
-from .conftest import FakeHubCache, FakeWhisperModel
+from .conftest import FakeHfApi, FakeHubCache, FakeWhisperModel
 
 PINNED = "0123456789abcdef0123456789abcdef01234567"
 
@@ -46,7 +46,9 @@ def _snapshot_dir(tmp_path: Path, sha: str = PINNED) -> Path:
     snapshot = tmp_path / "snapshots" / sha
     snapshot.mkdir(parents=True)
     (snapshot / "model.bin").write_bytes(b"\x00" * 64)
+    (snapshot / "config.json").write_text("{}")
     (snapshot / "tokenizer.json").write_text("{}")
+    (snapshot / "vocabulary.txt").write_text("<|a|>")
     return snapshot
 
 
@@ -54,7 +56,9 @@ def _ct2_dir(tmp_path: Path) -> Path:
     root = tmp_path / "local-ct2"
     root.mkdir()
     (root / "model.bin").write_bytes(b"\x00" * 16)
+    (root / "config.json").write_text("{}")
     (root / "tokenizer.json").write_text("{}")
+    (root / "vocabulary.json").write_text("[]")
     return root
 
 
@@ -122,7 +126,7 @@ def test_hub_ready_cache_reports_location_size_and_commit(
     assert requirement.can_acquire_now is False
     assert requirement.acquisition_blocker is None
     assert requirement.location == snapshot
-    assert requirement.size_bytes == 66
+    assert requirement.size_bytes == 73
     # The commit is read off the Hugging Face snapshots/<sha> layout.
     assert requirement.artifact_version == PINNED
 
@@ -178,7 +182,7 @@ def test_model_path_ready_directory(
     (requirement,) = TinyASR(model_path=str(local)).artifact_status().requirements
     assert requirement.state == ARTIFACT_READY
     assert requirement.location == local
-    assert requirement.size_bytes == 18
+    assert requirement.size_bytes == 22
 
 
 def test_model_path_without_model_file_is_incomplete_with_guidance(
@@ -319,11 +323,18 @@ def test_refresh_re_resolves_a_ready_mutable_source(
 ) -> None:
     snapshot = _snapshot_dir(tmp_path)
     FakeHubCache.resolved_path = str(snapshot)
-    engine = TinyASR()
+    FakeHfApi.remote_sha = PINNED
+    engine = TinyASR(hf_token="hf_abc")
     assert engine.acquire_artifacts().readiness == ARTIFACTS_READY
     assert FakeHubCache.download_calls == 0  # plain pull: ready is a no-op
+    assert FakeHfApi.model_info_calls == []  # plain pull never queries the source
     engine.acquire_artifacts(refresh=True)
     assert FakeHubCache.download_calls == 1  # refresh re-resolves the branch
+    # The re-resolution evidence: one metadata query against the upstream
+    # size table's repo, with the engine's credentials.
+    (call,) = FakeHfApi.model_info_calls
+    assert call == {"repo_id": "Systran/faster-whisper-tiny", "revision": None}
+    assert FakeHfApi.last_token == "hf_abc"
 
 
 def test_refresh_skips_a_pinned_revision(
@@ -333,6 +344,7 @@ def test_refresh_skips_a_pinned_revision(
     report = TinyASR(revision=PINNED).acquire_artifacts(refresh=True)
     assert report.readiness == ARTIFACTS_READY
     assert FakeHubCache.download_calls == 0
+    assert FakeHfApi.model_info_calls == []  # a pinned commit needs no query
 
 
 def test_refresh_with_downloads_disabled_raises(
@@ -436,6 +448,7 @@ def test_partial_snapshot_reports_incomplete_and_pull_repairs(
     def _complete_download() -> None:
         (partial / "model.bin").write_bytes(b"\x00" * 64)
         (partial / "tokenizer.json").write_text("{}")
+        (partial / "vocabulary.txt").write_text("<|a|>")
 
     FakeHubCache.on_download = _complete_download
     repaired = TinyASR().acquire_artifacts()
@@ -464,6 +477,7 @@ def test_refresh_respects_engine_local_files_only(
         TinyASR(local_files_only=True).acquire_artifacts(refresh=True)
     assert exc_info.value.reason == "downloads_disabled"
     assert FakeHubCache.download_calls == 0
+    assert FakeHfApi.model_info_calls == []  # gated before the source query
 
 
 def test_relative_download_root_yields_an_absolute_location(
@@ -517,7 +531,9 @@ def test_tilde_model_path_reaches_the_loader_expanded(
     local = tmp_path / "ct2"
     local.mkdir()
     (local / "model.bin").write_bytes(b"\x00")
+    (local / "config.json").write_text("{}")
     (local / "tokenizer.json").write_text("{}")
+    (local / "vocabulary.json").write_text("[]")
     engine = TinyASR(model_path="~/ct2")
     (requirement,) = engine.artifact_status().requirements
     assert requirement.state == ARTIFACT_READY
@@ -556,6 +572,325 @@ def test_streaming_session_emits_artifact_unavailable_terminal(
     (error,) = [event for event in events if event.type == "error"]
     assert error.code == "artifact_unavailable"
     assert error.recoverable is False
+
+
+# --------------------------------------------------------------------------- #
+# Round-3 review regressions: the load closure and refresh evidence
+# --------------------------------------------------------------------------- #
+def test_snapshot_missing_config_is_incomplete(
+    fake_faster_whisper: type[FakeWhisperModel], tmp_path: Path
+) -> None:
+    # CTranslate2 loads without config.json, but every decode reads its
+    # fields at request time and fails -- a bundle lacking it cannot serve a
+    # single request, so ready would be a lie.
+    snapshot = _snapshot_dir(tmp_path)
+    (snapshot / "config.json").unlink()
+    FakeHubCache.resolved_path = str(snapshot)
+    (requirement,) = TinyASR().artifact_status().requirements
+    assert requirement.state == "incomplete"
+
+
+def test_snapshot_missing_vocabulary_is_incomplete(
+    fake_faster_whisper: type[FakeWhisperModel], tmp_path: Path
+) -> None:
+    # CTranslate2 refuses to load a directory without a vocabulary file.
+    snapshot = _snapshot_dir(tmp_path)
+    (snapshot / "vocabulary.txt").unlink()
+    FakeHubCache.resolved_path = str(snapshot)
+    (requirement,) = TinyASR().artifact_status().requirements
+    assert requirement.state == "incomplete"
+
+
+def test_128_mel_preset_requires_preprocessor_config(
+    fake_faster_whisper: type[FakeWhisperModel], tmp_path: Path
+) -> None:
+    # The 128-mel repos ship preprocessor_config.json and need it (without
+    # the file upstream silently builds an 80-mel feature extractor); the
+    # 80-mel repos do not carry it at all, so the requirement is per preset.
+    snapshot = _snapshot_dir(tmp_path)
+    FakeHubCache.resolved_path = str(snapshot)
+    (tiny_requirement,) = TinyASR().artifact_status().requirements
+    assert tiny_requirement.state == ARTIFACT_READY
+    (large_requirement,) = FasterWhisperASR().artifact_status().requirements
+    assert large_requirement.state == "incomplete"
+    (snapshot / "preprocessor_config.json").write_text("{}")
+    (large_requirement,) = FasterWhisperASR().artifact_status().requirements
+    assert large_requirement.state == ARTIFACT_READY
+
+
+def test_model_path_ignores_preset_bundle_files(
+    fake_faster_whisper: type[FakeWhisperModel], tmp_path: Path
+) -> None:
+    # model_path replaces the preset's Hub bundle with an operator conversion
+    # of an arbitrary Whisper variant; only the loader-universal closure is
+    # checkable there.
+    local = _ct2_dir(tmp_path)
+    (requirement,) = FasterWhisperASR(model_path=str(local)).artifact_status().requirements
+    assert requirement.state == ARTIFACT_READY
+
+
+def test_hub_repo_id_mirrors_the_upstream_rule() -> None:
+    # A slashed id passes through untouched; a size resolves through the
+    # genuine upstream table (registered by the fixture before the fake).
+    from std_faster_whisper._artifacts import _hub_repo_id
+
+    assert _hub_repo_id("someorg/custom-ct2") == "someorg/custom-ct2"
+    assert _hub_repo_id("tiny") == "Systran/faster-whisper-tiny"
+
+
+def test_implicit_load_verifies_the_acquisition_postcondition(
+    fake_faster_whisper: type[FakeWhisperModel], tmp_path: Path
+) -> None:
+    # The loader doubles as the implicit acquisition, and its internal
+    # downloader silently falls back to the local cache when the remote is
+    # unreachable -- so a load can succeed on the same incomplete bundle
+    # status just reported. The model must not be adopted when the bundle
+    # stayed incomplete.
+    partial = _snapshot_dir(tmp_path)  # complete for tiny, not for large-v3
+    FakeHubCache.resolved_path = str(partial)
+    engine = FasterWhisperASR()
+    with pytest.raises(ArtifactAcquisitionError) as exc_info:
+        engine.prepare()
+    assert exc_info.value.reason == "failed"
+    assert "without completing" in str(exc_info.value)
+    assert engine._model is None
+
+
+def test_implicit_load_adopts_the_model_once_the_bundle_completes(
+    fake_faster_whisper: type[FakeWhisperModel], tmp_path: Path
+) -> None:
+    # The happy path of the same guard: the in-loader acquisition genuinely
+    # materializes the missing file, the postcondition holds, and the loaded
+    # model is adopted.
+    partial = _snapshot_dir(tmp_path)
+    FakeHubCache.resolved_path = str(partial)
+    fake_faster_whisper.on_init = lambda: (partial / "preprocessor_config.json").write_text("{}")
+    engine = FasterWhisperASR()
+    engine.prepare()
+    assert engine._model is not None
+
+
+def test_load_rejects_a_mel_mismatched_model_path_bundle(
+    fake_faster_whisper: type[FakeWhisperModel], tmp_path: Path
+) -> None:
+    # The mel closure is only provable post-load (nothing on disk names the
+    # model's mel count): a 128-mel conversion without
+    # preprocessor_config.json passes the file closure, loads, and upstream
+    # silently builds an 80-mel feature extractor whose output CTranslate2
+    # rejects at the first request with a bare shape error (verified
+    # empirically). The load-time check turns that into an actionable
+    # artifact error, for ANY Whisper variant behind model_path.
+    fake_faster_whisper.n_mels = 128
+    engine = TinyASR(model_path=str(_ct2_dir(tmp_path)))
+    with pytest.raises(ArtifactUnavailableError) as exc_info:
+        engine.prepare()
+    assert exc_info.value.reason == "incomplete"
+    assert "128" in str(exc_info.value)
+    assert exc_info.value.hint is not None and "--copy_files" in exc_info.value.hint
+    assert engine._model is None
+    # The attached report must ESTABLISH the unavailable state (the error
+    # contract) -- not repeat the pre-load ready observation.
+    report = exc_info.value.report
+    assert report is not None and report.readiness == ARTIFACTS_UNAVAILABLE
+    (requirement,) = report.requirements
+    assert requirement.state == "incomplete"
+    (action,) = requirement.required_actions
+    assert action.kind == "provide_artifacts" and "128" in action.message
+
+
+def test_load_rejects_a_mel_mismatched_hub_snapshot(
+    fake_faster_whisper: type[FakeWhisperModel], tmp_path: Path
+) -> None:
+    # The same post-load authority backstops the Hub path (a present but
+    # wrong preprocessor_config.json passes the file closure). The
+    # requirement must NOT promise can_acquire_now: the public acquisition
+    # path re-inspects the disk closure (which looks ready, so a plain pull
+    # would not run), and the Hub cache never refetches a present file of
+    # the resolved commit (so even a run would not repair) -- the executable
+    # repair is the action's removal instruction.
+    fake_faster_whisper.n_mels = 128
+    FakeHubCache.resolved_path = str(_snapshot_dir(tmp_path))
+    engine = TinyASR()
+    with pytest.raises(ArtifactUnavailableError) as exc_info:
+        engine.prepare()
+    assert exc_info.value.reason == "incomplete"
+    assert exc_info.value.hint is not None and "Remove" in exc_info.value.hint
+    assert engine._model is None
+    report = exc_info.value.report
+    assert report is not None and report.readiness == ARTIFACTS_UNAVAILABLE
+    (requirement,) = report.requirements
+    assert requirement.state == "incomplete"
+    assert requirement.can_acquire_now is False
+    assert requirement.acquisition_blocker == "action_required"
+    (action,) = requirement.required_actions
+    assert action.kind == "other"
+    assert "128" in action.message
+    # The removal target is the repository CACHE ROOT, not the snapshot
+    # pointer: the downloader rebuilds a deleted pointer from the blob store
+    # without a transfer, so naming the snapshot folder would send the
+    # operator through a no-op.
+    assert str(tmp_path) in action.message and "blob store" in action.message
+
+
+def test_mel_mismatch_report_names_the_snapshot_the_loader_used(
+    fake_faster_whisper: type[FakeWhisperModel], tmp_path: Path
+) -> None:
+    # The loader's online resolution can move a mutable revision past the
+    # preflight's cache-resolved commit; the report and action must then
+    # name the snapshot the mismatch actually came from, not the stale one.
+    old_sha, new_sha = "a" * 40, "b" * 40
+    old = _snapshot_dir(tmp_path, sha=old_sha)
+    fake_faster_whisper.n_mels = 128
+    FakeHubCache.resolved_path = str(old)
+
+    def _branch_moved_during_load() -> None:
+        FakeHubCache.resolved_path = str(_snapshot_dir(tmp_path, sha=new_sha))
+
+    fake_faster_whisper.on_init = _branch_moved_during_load
+    with pytest.raises(ArtifactUnavailableError) as exc_info:
+        TinyASR().prepare()
+    assert exc_info.value.report is not None
+    (requirement,) = exc_info.value.report.requirements
+    assert requirement.location == tmp_path / "snapshots" / new_sha
+    assert requirement.artifact_version == new_sha
+
+
+def test_mel_mismatch_action_without_a_cache_layout_stays_generic() -> None:
+    # A base without a snapshots/<commit> location (an unknown-state
+    # observation) yields the same action minus the concrete path.
+    from standard_asr.contract.artifacts import ArtifactRequirement
+
+    from std_faster_whisper._artifacts import mel_mismatch_requirement
+    from std_faster_whisper._config import FasterWhisperConfig
+
+    base = ArtifactRequirement(
+        artifact_id="ct2-recognizer",
+        label="faster-whisper tiny (CTranslate2)",
+        state="unknown",
+        required_for_inference=True,
+        can_acquire_now=True,
+        may_acquire_during_inference=True,
+        source_is_mutable=True,
+    )
+    requirement = mel_mismatch_requirement(
+        FasterWhisperConfig.from_env("faster-whisper"),
+        base,
+        model_n_mels=128,
+        extractor_n_mels=80,
+    )
+    (action,) = requirement.required_actions
+    assert "repository cache directory and" in action.message  # no path inserted
+
+
+def test_mel_mismatch_action_is_executable_end_to_end(
+    fake_faster_whisper: type[FakeWhisperModel], tmp_path: Path
+) -> None:
+    # The repair instruction must be real: a plain pull right after the
+    # mismatch is an honest no-op (status is a point-in-time DISK
+    # observation, spec AR.9, and the disk closure looks ready), while
+    # following the action -- removing the snapshot -- makes the same public
+    # pull genuinely re-acquire.
+    import shutil
+
+    fake_faster_whisper.n_mels = 128
+    snapshot = _snapshot_dir(tmp_path)
+    FakeHubCache.resolved_path = str(snapshot)
+    engine = TinyASR()
+    with pytest.raises(ArtifactUnavailableError):
+        engine.prepare()
+
+    report = engine.acquire_artifacts()  # plain pull: disk says ready, no-op
+    assert report.readiness == ARTIFACTS_READY
+    assert FakeHubCache.download_calls == 0
+
+    def _redownload() -> None:
+        # The real downloader materializes the (now content-correct) bundle.
+        _snapshot_dir(tmp_path / "fresh")
+        FakeHubCache.resolved_path = str(tmp_path / "fresh" / "snapshots" / PINNED)
+
+    # The action's instruction: the repository cache ROOT, not the snapshot
+    # pointer (which the blob store would rebuild without a transfer).
+    shutil.rmtree(tmp_path)
+    FakeHubCache.on_download = _redownload
+    repaired = engine.acquire_artifacts()
+    assert FakeHubCache.download_calls == 1
+    assert repaired.readiness == ARTIFACTS_READY
+
+
+def test_refresh_fails_when_the_source_is_unreachable(
+    fake_faster_whisper: type[FakeWhisperModel], tmp_path: Path
+) -> None:
+    # The downloader silently falls back to the local cache when the remote
+    # is unreachable, so refresh must fail without re-resolution evidence
+    # instead of reporting the stale cache as fresh (spec AR.4).
+    FakeHubCache.resolved_path = str(_snapshot_dir(tmp_path))
+    FakeHfApi.raise_on_model_info = ConnectionError("network is down")
+    with pytest.raises(ArtifactAcquisitionError) as exc_info:
+        TinyASR().acquire_artifacts(refresh=True)
+    assert exc_info.value.reason == "failed"
+    assert isinstance(exc_info.value.__cause__, ConnectionError)
+    assert FakeHubCache.download_calls == 0  # fail fast, before any transfer
+
+
+def test_refresh_detects_a_stale_cache_fallback(
+    fake_faster_whisper: type[FakeWhisperModel], tmp_path: Path
+) -> None:
+    # The source re-resolved to a new commit, but the download resolved the
+    # old snapshot (the mid-transfer fallback): success here would claim
+    # freshness the source never confirmed.
+    FakeHubCache.resolved_path = str(_snapshot_dir(tmp_path))
+    FakeHfApi.remote_sha = "f" * 40
+    with pytest.raises(ArtifactAcquisitionError) as exc_info:
+        TinyASR().acquire_artifacts(refresh=True)
+    assert exc_info.value.reason == "failed"
+    assert "fell back" in str(exc_info.value)
+
+
+def test_refresh_gated_source_query_reports_request_access(
+    fake_faster_whisper: type[FakeWhisperModel], tmp_path: Path
+) -> None:
+    # An access rejection during the metadata query carries the same
+    # discovered action as one during the transfer.
+    FakeHubCache.resolved_path = str(_snapshot_dir(tmp_path))
+    FakeHfApi.raise_on_model_info = _gated_error()
+    with pytest.raises(ArtifactAcquisitionError) as exc_info:
+        TinyASR().acquire_artifacts(refresh=True)
+    assert exc_info.value.reason == "action_required"
+    (action,) = exc_info.value.required_actions
+    assert action.kind == "request_access"
+
+
+def test_refresh_fails_when_the_source_names_no_commit(
+    fake_faster_whisper: type[FakeWhisperModel], tmp_path: Path
+) -> None:
+    FakeHubCache.resolved_path = str(_snapshot_dir(tmp_path))
+    FakeHfApi.remote_sha = None
+    with pytest.raises(ArtifactAcquisitionError) as exc_info:
+        TinyASR().acquire_artifacts(refresh=True)
+    assert exc_info.value.reason == "failed"
+    assert "commit" in str(exc_info.value)
+
+
+def test_plain_pull_repair_needs_no_source_query(
+    fake_faster_whisper: type[FakeWhisperModel], tmp_path: Path
+) -> None:
+    # Plain acquisition keeps its documented semantics: materialize what is
+    # absent, no freshness promise, so no metadata query -- the template's
+    # final status check still guards the postcondition.
+    partial = tmp_path / "snapshots" / PINNED
+    partial.mkdir(parents=True)
+    (partial / "config.json").write_text("{}")
+    FakeHubCache.resolved_path = str(partial)
+
+    def _complete_download() -> None:
+        (partial / "model.bin").write_bytes(b"\x00" * 64)
+        (partial / "tokenizer.json").write_text("{}")
+        (partial / "vocabulary.txt").write_text("<|a|>")
+
+    FakeHubCache.on_download = _complete_download
+    report = TinyASR().acquire_artifacts()
+    assert report.readiness == ARTIFACTS_READY
+    assert FakeHfApi.model_info_calls == []
 
 
 def test_first_use_gated_repo_reports_request_access(

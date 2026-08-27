@@ -56,7 +56,12 @@ def _ct2_dir(tmp_path_factory: pytest.TempPathFactory) -> None:
     global CT2_DIR
     root = tmp_path_factory.mktemp("ct2")
     (root / "model.bin").write_bytes(b"\x00")
+    (root / "config.json").write_text("{}")
     (root / "tokenizer.json").write_text("{}")
+    (root / "vocabulary.json").write_text("[]")
+    # Present so the same directory also passes the large-v3 preset's Hub
+    # closure when installed as FakeHubCache.resolved_path.
+    (root / "preprocessor_config.json").write_text("{}")
     CT2_DIR = str(root)
 
 
