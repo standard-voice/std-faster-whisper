@@ -199,8 +199,16 @@ def _resolve_cached_snapshot(
     except FileNotFoundError:
         # The documented not-in-cache outcome of an offline resolution
         # (upstream LocalEntryNotFoundError subclasses FileNotFoundError, so
-        # this classification needs no fragile hub import): reliable evidence
-        # of a missing snapshot. A PermissionError is deliberately NOT here.
+        # this classification needs no fragile hub import). A
+        # PermissionError raised directly is deliberately NOT here. Known
+        # imprecision (round-16 review): the hub client checks the cache
+        # with os.path.exists, which swallows EACCES, so an UNTRAVERSABLE
+        # cache root raises this same miss and reports missing where
+        # unknown is truer. Distinguishing them needs a parent-walking
+        # reachability check mirroring the hub's own path resolution --
+        # fragile machinery for a filesystem that is already broken, where
+        # every downstream operation fails loudly anyway. The conflation
+        # is upstream's (LocalEntryNotFoundError covers both); accepted.
         return ARTIFACT_MISSING, None
     except Exception:
         # Anything else (an unreadable cache, a permission failure, a stalled
