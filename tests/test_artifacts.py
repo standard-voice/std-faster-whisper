@@ -25,7 +25,7 @@ from standard_asr.contract.exceptions import (
     ArtifactAcquisitionError,
     ArtifactUnavailableError,
 )
-from standard_asr.engine import NO_ARTIFACT_ACQUISITION
+from standard_asr.engine import NO_ARTIFACT_LIFECYCLE
 
 from std_faster_whisper import FasterWhisperASR, TinyASR
 
@@ -67,10 +67,10 @@ def _ct2_dir(tmp_path: Path) -> Path:
 # --------------------------------------------------------------------------- #
 def test_declared_metadata_upper_bounds() -> None:
     artifacts = FasterWhisperASR.declared_metadata.artifacts
-    assert artifacts.acquisition_applicable is True
+    assert artifacts.applicable is True
     assert artifacts.supports_explicit_acquisition is True
     assert artifacts.may_acquire_during_inference is True
-    assert artifacts != NO_ARTIFACT_ACQUISITION
+    assert artifacts != NO_ARTIFACT_LIFECYCLE
 
 
 def test_protocol_version_is_1_1() -> None:
