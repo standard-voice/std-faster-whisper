@@ -181,7 +181,7 @@ All fields also fall back to environment variables
 Model weights load **lazily** on first transcription. Downloads respect
 `STANDARD_ASR_ALLOW_DOWNLOAD`.
 
-**Artifact lifecycle (protocol 1.1).** `standard-asr status faster-whisper/tiny`
+**Artifact lifecycle.** `standard-asr status faster-whisper/tiny`
 reports whether the preset's CTranslate2 bundle is cached. `ready` means the
 loader's own closure is present: `model.bin`, `config.json` (every decode
 reads its fields at request time), `tokenizer.json` (without it, upstream

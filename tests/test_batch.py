@@ -155,7 +155,7 @@ def test_init_failure_over_cold_cache_is_acquisition_error(
     fake_faster_whisper: type[FakeWhisperModel],
 ) -> None:
     # No cached snapshot and downloads allowed: the loader IS the implicit
-    # acquisition path, so its failure is a failed acquisition (protocol 1.1),
+    # acquisition path, so its failure is a failed acquisition,
     # not a generic engine fault.
     fake_faster_whisper.raise_on_init = RuntimeError("network exploded")
     with pytest.raises(ArtifactAcquisitionError) as exc_info:

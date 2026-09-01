@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Standard Voice Contributors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Artifact-lifecycle status and acquisition (protocol 1.1).
+"""Artifact-lifecycle status and acquisition.
 
 Every test runs against the injected fakes; no weights are downloaded. The
 matrix covers both configured shapes (Hub preset, operator ``model_path``),
@@ -74,7 +74,7 @@ def test_declared_metadata_upper_bounds() -> None:
 
 
 def test_protocol_version_is_1_1() -> None:
-    assert FasterWhisperASR.properties.protocol_version == "1.1.0"
+    assert FasterWhisperASR.properties.protocol_version == "0.2.0"
 
 
 # --------------------------------------------------------------------------- #

@@ -417,7 +417,7 @@ class FasterWhisperASR(EngineBase):
         self._ensure_model_loaded()
 
     # ------------------------------------------------------------------ #
-    # Inference-artifact lifecycle (protocol 1.1)
+    # Inference-artifact lifecycle
     # ------------------------------------------------------------------ #
     def _artifact_requirements(
         self,
