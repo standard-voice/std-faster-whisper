@@ -25,6 +25,7 @@ from standard_asr.contract.capabilities import (
     WordTimestampsCap,
 )
 from standard_asr.contract.exceptions import (
+    ArtifactAcquisitionError,
     DiscoveryError,
     InvalidProviderParamError,
     TranscriptionError,
@@ -42,7 +43,26 @@ from std_faster_whisper import (
     TurboASR,
 )
 
-from .conftest import FakeInfo, FakeSegment, FakeWhisperModel, FakeWord
+from .conftest import FakeHubCache, FakeInfo, FakeSegment, FakeWhisperModel, FakeWord
+
+#: A ready CTranslate2-shaped directory for ``model_path`` tests, set once per
+#: module by the autouse fixture below. The artifact guard inspects the path
+#: before loading, so a placeholder string is no longer enough.
+CT2_DIR = ""
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _ct2_dir(tmp_path_factory: pytest.TempPathFactory) -> None:
+    global CT2_DIR
+    root = tmp_path_factory.mktemp("ct2")
+    (root / "model.bin").write_bytes(b"\x00")
+    (root / "config.json").write_text("{}")
+    (root / "tokenizer.json").write_text("{}")
+    (root / "vocabulary.json").write_text("[]")
+    # Present so the same directory also passes the large-v3 preset's Hub
+    # closure when installed as FakeHubCache.resolved_path.
+    (root / "preprocessor_config.json").write_text("{}")
+    CT2_DIR = str(root)
 
 
 def _audio(n: int = 16000) -> tuple[np.ndarray, int]:
@@ -107,7 +127,7 @@ def test_provider_params_swap_safety() -> None:
         knob: int = 1
 
     with pytest.raises(InvalidProviderParamError):
-        FasterWhisperASR(model_path="tiny").transcribe(
+        FasterWhisperASR(model_path=CT2_DIR).transcribe(
             _audio(), RuntimeParams(provider_params=OtherParams())
         )
 
@@ -131,21 +151,38 @@ def test_ensure_model_loaded_missing_library(monkeypatch: pytest.MonkeyPatch) ->
         FasterWhisperASR().prepare()
 
 
-def test_ensure_model_loaded_init_failure(fake_faster_whisper: type[FakeWhisperModel]) -> None:
-    fake_faster_whisper.raise_on_init = RuntimeError("weights missing")
-    with pytest.raises(DiscoveryError, match="Failed to load"):
+def test_init_failure_over_cold_cache_is_acquisition_error(
+    fake_faster_whisper: type[FakeWhisperModel],
+) -> None:
+    # No cached snapshot and downloads allowed: the loader IS the implicit
+    # acquisition path, so its failure is a failed acquisition,
+    # not a generic engine fault.
+    fake_faster_whisper.raise_on_init = RuntimeError("network exploded")
+    with pytest.raises(ArtifactAcquisitionError) as exc_info:
+        FasterWhisperASR().prepare()
+    assert exc_info.value.reason == "failed"
+
+
+def test_init_failure_with_ready_cache_is_engine_fault(
+    fake_faster_whisper: type[FakeWhisperModel],
+) -> None:
+    # The snapshot is cached and complete; a loader failure is then an
+    # engine-execution fault (batch R7 mapping), never an artifact error.
+    FakeHubCache.resolved_path = CT2_DIR
+    fake_faster_whisper.raise_on_init = RuntimeError("bad compute type")
+    with pytest.raises(TranscriptionError, match="failed to load"):
         FasterWhisperASR().prepare()
 
 
 def test_prepare_loads_model_once(fake_faster_whisper: type[FakeWhisperModel]) -> None:
-    engine = FasterWhisperASR(model_path="tiny", device="cpu")
+    engine = FasterWhisperASR(model_path=CT2_DIR, device="cpu")
     engine.prepare()
     assert engine._model is not None
     first = engine._model
     engine.prepare()
     assert engine._model is first
     # An explicit model_path is a local override and wins over model_size.
-    assert fake_faster_whisper.last_init_kwargs["model_size_or_path"] == "tiny"
+    assert fake_faster_whisper.last_init_kwargs["model_size_or_path"] == CT2_DIR
 
 
 def test_preset_loads_its_model_size_by_default(
@@ -163,12 +200,12 @@ def test_hf_token_forwarded_as_plaintext_to_loader(
     fake_faster_whisper: type[FakeWhisperModel],
 ) -> None:
     # The secret is materialized to plaintext ONLY at the SDK call site.
-    FasterWhisperASR(model_path="tiny", hf_token="hf_abc").prepare()
+    FasterWhisperASR(model_path=CT2_DIR, hf_token="hf_abc").prepare()
     assert fake_faster_whisper.last_init_kwargs["use_auth_token"] == "hf_abc"
 
 
 def test_no_hf_token_forwards_none(fake_faster_whisper: type[FakeWhisperModel]) -> None:
-    FasterWhisperASR(model_path="tiny").prepare()
+    FasterWhisperASR(model_path=CT2_DIR).prepare()
     assert fake_faster_whisper.last_init_kwargs["use_auth_token"] is None
 
 
@@ -177,7 +214,7 @@ def test_download_root_disabled_forces_local_only(
 ) -> None:
     monkeypatch.setenv("STANDARD_ASR_ALLOW_DOWNLOAD", "0")
     monkeypatch.setenv("STANDARD_ASR_MODEL_DIR", "/tmp/ignored")
-    engine = FasterWhisperASR(model_path="tiny", download_root="/tmp/models")
+    engine = FasterWhisperASR(model_path=CT2_DIR, download_root="/tmp/models")
     engine.prepare()
     assert fake_faster_whisper.last_init_kwargs["local_files_only"] is True
     assert fake_faster_whisper.last_init_kwargs["download_root"] == "/tmp/models"
@@ -188,7 +225,7 @@ def test_download_root_defers_to_library_default(
 ) -> None:
     monkeypatch.setenv("STANDARD_ASR_ALLOW_DOWNLOAD", "1")
     monkeypatch.delenv("STANDARD_ASR_MODEL_DIR", raising=False)
-    FasterWhisperASR(model_path="tiny").prepare()
+    FasterWhisperASR(model_path=CT2_DIR).prepare()
     assert fake_faster_whisper.last_init_kwargs["download_root"] is None
     assert fake_faster_whisper.last_init_kwargs["local_files_only"] is False
 
@@ -198,7 +235,7 @@ def test_env_fallback_for_engine_field(
 ) -> None:
     # Engine-declared fields get env entries too (spec IC.4 full-table DX).
     monkeypatch.setenv("STANDARD_ASR_FASTER_WHISPER__COMPUTE_TYPE", "int8")
-    FasterWhisperASR(model_path="tiny").prepare()
+    FasterWhisperASR(model_path=CT2_DIR).prepare()
     assert fake_faster_whisper.last_init_kwargs["compute_type"] == "int8"
 
 
@@ -209,7 +246,7 @@ def test_transcribe_array_basic(fake_faster_whisper: type[FakeWhisperModel]) -> 
     fake_faster_whisper.segments = [FakeSegment(0.0, 1.0, "Hello world.")]
     fake_faster_whisper.info = FakeInfo(language="en")
 
-    result = FasterWhisperASR(model_path="tiny").transcribe(_audio(), RuntimeParams(language="en"))
+    result = FasterWhisperASR(model_path=CT2_DIR).transcribe(_audio(), RuntimeParams(language="en"))
     assert result.text == "Hello world."
     assert result.detected_language == "en"
     assert result.language_confidence == pytest.approx(0.97)
@@ -225,7 +262,7 @@ def test_transcribe_wraps_engine_failure_as_transcription_error(
     boom = RuntimeError("CUDA out of memory")
     fake_faster_whisper.raise_on_transcribe = boom
     with pytest.raises(TranscriptionError) as exc_info:
-        FasterWhisperASR(model_path="tiny").transcribe(_audio(), RuntimeParams(language="en"))
+        FasterWhisperASR(model_path=CT2_DIR).transcribe(_audio(), RuntimeParams(language="en"))
     assert exc_info.value.__cause__ is boom
 
 
@@ -233,13 +270,13 @@ def test_transcribe_region_tagged_language_uses_primary_subtag(
     fake_faster_whisper: type[FakeWhisperModel],
 ) -> None:
     fake_faster_whisper.segments = [FakeSegment(0.0, 1.0, "hi")]
-    FasterWhisperASR(model_path="tiny").transcribe(_audio(), RuntimeParams(language="en-US"))
+    FasterWhisperASR(model_path=CT2_DIR).transcribe(_audio(), RuntimeParams(language="en-US"))
     assert fake_faster_whisper.last_transcribe_kwargs["language"] == "en"
 
 
 def test_transcribe_auto_language_sends_none(fake_faster_whisper: type[FakeWhisperModel]) -> None:
     fake_faster_whisper.segments = [FakeSegment(0.0, 1.0, "hi")]
-    FasterWhisperASR(model_path="tiny").transcribe(_audio())
+    FasterWhisperASR(model_path=CT2_DIR).transcribe(_audio())
     assert fake_faster_whisper.last_transcribe_kwargs["language"] is None
 
 
@@ -247,7 +284,7 @@ def test_transcribe_with_word_timestamps(fake_faster_whisper: type[FakeWhisperMo
     words = [FakeWord(0.0, 0.5, "Hi", 0.9), FakeWord(0.5, 1.0, "there", 0.8)]
     fake_faster_whisper.segments = [FakeSegment(0.0, 1.0, "Hi there", words=words)]
 
-    result = FasterWhisperASR(model_path="tiny").transcribe(
+    result = FasterWhisperASR(model_path=CT2_DIR).transcribe(
         _audio(), RuntimeParams(language="en", word_timestamps=WordTimestampGranularity.WORD)
     )
     assert fake_faster_whisper.last_transcribe_kwargs["word_timestamps"] is True
@@ -267,7 +304,7 @@ def test_transcribe_segment_granularity_does_not_request_words(
     fake_faster_whisper: type[FakeWhisperModel],
 ) -> None:
     fake_faster_whisper.segments = [FakeSegment(0.0, 1.0, "Hi there")]
-    result = FasterWhisperASR(model_path="tiny").transcribe(
+    result = FasterWhisperASR(model_path=CT2_DIR).transcribe(
         _audio(), RuntimeParams(language="en", word_timestamps=WordTimestampGranularity.SEGMENT)
     )
     assert fake_faster_whisper.last_transcribe_kwargs["word_timestamps"] is False
@@ -280,7 +317,7 @@ def test_transcribe_with_prompt_and_phrase_hints(
     fake_faster_whisper: type[FakeWhisperModel],
 ) -> None:
     fake_faster_whisper.segments = [FakeSegment(0.0, 1.0, "x")]
-    FasterWhisperASR(model_path="tiny").transcribe(
+    FasterWhisperASR(model_path=CT2_DIR).transcribe(
         _audio(),
         RuntimeParams(language="en", prompt="context", phrase_hints=["Anthropic", "Claude"]),
     )
@@ -305,7 +342,7 @@ def test_over_budget_prompt_fails_loud_in_strict_mode(
     fake_faster_whisper.segments = [FakeSegment(0.0, 1.0, "x")]
     long_prompt = " ".join(["word"] * 201)
     with pytest.raises(UnsupportedFeatureError, match="prompt"):
-        FasterWhisperASR(model_path="tiny").transcribe(
+        FasterWhisperASR(model_path=CT2_DIR).transcribe(
             _audio(), RuntimeParams(language="en", prompt=long_prompt)
         )
 
@@ -315,7 +352,7 @@ def test_over_budget_prompt_truncated_with_diagnostic_in_best_effort(
 ) -> None:
     fake_faster_whisper.segments = [FakeSegment(0.0, 1.0, "x")]
     long_prompt = " ".join(["word"] * 201)
-    result = FasterWhisperASR(model_path="tiny", strict=False).transcribe(
+    result = FasterWhisperASR(model_path=CT2_DIR, strict=False).transcribe(
         _audio(), RuntimeParams(language="en", prompt=long_prompt)
     )
     forwarded = fake_faster_whisper.last_transcribe_kwargs["initial_prompt"]
@@ -329,7 +366,7 @@ def test_over_limit_phrase_hints_fail_loud_in_strict_mode(
     fake_faster_whisper.segments = [FakeSegment(0.0, 1.0, "x")]
     too_many = [f"term{i}" for i in range(51)]
     with pytest.raises(UnsupportedFeatureError, match="phrase_hints"):
-        FasterWhisperASR(model_path="tiny").transcribe(
+        FasterWhisperASR(model_path=CT2_DIR).transcribe(
             _audio(), RuntimeParams(language="en", phrase_hints=too_many)
         )
 
@@ -342,7 +379,7 @@ def test_transcribe_provider_params_forwarded(
         language="en",
         provider_params=FasterWhisperParams(task="translate", beam_size=3, temperature=[0.0, 0.2]),
     )
-    FasterWhisperASR(model_path="tiny").transcribe(_audio(), params)
+    FasterWhisperASR(model_path=CT2_DIR).transcribe(_audio(), params)
     kwargs = fake_faster_whisper.last_transcribe_kwargs
     assert kwargs["task"] == "translate"
     assert kwargs["beam_size"] == 3
@@ -360,7 +397,7 @@ def test_transcribe_from_file_path(
         wf.setframerate(16000)
         wf.writeframes(np.zeros(16, dtype=np.int16).tobytes())
 
-    result = FasterWhisperASR(model_path="tiny").transcribe(AudioPath(wav), RuntimeParams())
+    result = FasterWhisperASR(model_path=CT2_DIR).transcribe(AudioPath(wav), RuntimeParams())
     assert result.text == "from file"
     assert fake_faster_whisper.last_transcribe_kwargs["source"] == str(wav)
 
@@ -376,7 +413,7 @@ def test_transcribe_from_bytes_uses_binary_file_like(
         wf.setframerate(16000)
         wf.writeframes(np.zeros(16, dtype=np.int16).tobytes())
 
-    result = FasterWhisperASR(model_path="tiny").transcribe(
+    result = FasterWhisperASR(model_path=CT2_DIR).transcribe(
         AudioBytes(buf.getvalue()), RuntimeParams()
     )
     assert result.text == "from bytes"
@@ -388,7 +425,7 @@ def test_transcribe_detected_language_none_when_unknown(
 ) -> None:
     fake_faster_whisper.segments = [FakeSegment(0.0, 1.0, "x")]
     fake_faster_whisper.info = FakeInfo(language=None)
-    result = FasterWhisperASR(model_path="tiny").transcribe(_audio(), RuntimeParams(language="en"))
+    result = FasterWhisperASR(model_path=CT2_DIR).transcribe(_audio(), RuntimeParams(language="en"))
     assert result.detected_language is None
 
 
@@ -397,7 +434,10 @@ def test_engine_specific_data_goes_to_extra_not_metadata(
 ) -> None:
     fake_faster_whisper.segments = [FakeSegment(0.0, 1.0, "x")]
     fake_faster_whisper.info = FakeInfo(language="en", duration_after_vad=0.8)
-    result = FasterWhisperASR(model_path="tiny").transcribe(_audio(), RuntimeParams(language="en"))
-    assert result.metadata == {}
+    result = FasterWhisperASR(model_path=CT2_DIR).transcribe(_audio(), RuntimeParams(language="en"))
+    # The result schema has no blanket metadata pocket (core removed it);
+    # engine-specific values live in the strict wire-JSON extra channel.
+    assert not hasattr(result, "metadata")
     assert result.extra["transcription_options"]["task"] == "transcribe"
+    assert result.extra["transcription_options"]["temperatures"] == [0.0]
     assert result.extra["duration_after_vad"] == pytest.approx(0.8)

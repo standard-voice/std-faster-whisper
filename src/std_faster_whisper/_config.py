@@ -22,6 +22,7 @@ from collections.abc import Sequence
 from typing import Any, Literal
 
 from pydantic import Field, SecretStr
+from standard_asr.contract.params import ProviderParams
 from standard_asr.engine import (
     BaseConfig,
     DeviceConfigMixin,
@@ -29,7 +30,6 @@ from standard_asr.engine import (
     LanguageConfigMixin,
     secret_field,
 )
-from standard_asr.contract.params import ProviderParams
 
 
 class FasterWhisperConfig(
@@ -60,7 +60,11 @@ class FasterWhisperConfig(
         model_path: Optional LOCAL checkpoint directory overriding the preset's
             model (spec IC.7 weights/path). The model is chosen by the preset,
             not by this field.
-        device_index: CTranslate2 device index or list of indices.
+        device_index: CTranslate2 device index (single device).
+        device_indices: Optional list of device indices for multi-device
+            inference; when set it wins over ``device_index``. Declared as a
+            separate field because the core env codec (spec IC.4) rejects a
+            scalar-or-list union: an env string would have no defined reading.
         compute_type: CTranslate2 quantization/precision (e.g. ``"int8"``,
             ``"float16"``, ``"default"``).
         cpu_threads: CPU threads for inference (``0`` = CTranslate2 default).
@@ -81,14 +85,17 @@ class FasterWhisperConfig(
 
     model_path: str | None = Field(
         default=None,
+        min_length=1,
         description=(
             "Optional local checkpoint directory overriding the preset's model "
             "(spec IC.7 weights/path). The model is selected by the entry-point "
             "preset, not by this field; None loads the preset's model."
         ),
     )
-    device_index: int | list[int] = Field(
-        default=0, description="CTranslate2 device index/indices."
+    device_index: int = Field(default=0, description="CTranslate2 device index (single device).")
+    device_indices: list[int] | None = Field(
+        default=None,
+        description="Device indices for multi-device inference (wins over device_index).",
     )
     compute_type: str = Field(
         default="default",

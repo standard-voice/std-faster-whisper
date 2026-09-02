@@ -11,11 +11,11 @@ and side-effect-free so they are trivially unit-testable against fakes.
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 from numpy.typing import NDArray
-from standard_asr.contract.results import Segment, Word
+from standard_asr.contract.results import Segment, Word, to_json_value
 
 #: 16-bit signed little-endian PCM is the canonical wire encoding (spec AI). The
 #: reverse of the canonical int16->float scaling is /32768 (spec AI R4).
@@ -114,9 +114,12 @@ def safe_extra(info: Any) -> dict[str, Any]:
     """Build the whitelisted engine-specific ``extra`` from a ``TranscriptionInfo``.
 
     These are faster-whisper-private values (the decoding knobs the run used and
-    the post-VAD duration) -- not standardized cross-engine metadata -- so per
-    spec TR.1 they belong in ``result.extra`` (engine-specific channel), never in
-    ``result.metadata``. Only small, non-sensitive options are included.
+    the post-VAD duration) -- not standardized cross-engine data -- so per spec
+    TR.1 they belong in ``result.extra``, the engine-specific channel. Only
+    small, non-sensitive options are included. ``extra`` is a strict wire-JSON
+    slot, so a native tuple such as ``temperatures`` must become a list here
+    (the runtime conversion); ``to_json_value`` then absorbs the static
+    list-invariance projection the slot's declaration requires.
 
     Args:
         info: faster-whisper's ``TranscriptionInfo``.
@@ -129,7 +132,12 @@ def safe_extra(info: Any) -> dict[str, Any]:
     if options is not None:
         for name in _SAFE_OPTION_FIELDS:
             if hasattr(options, name):
-                safe[name] = getattr(options, name)
+                value: object = getattr(options, name)
+                if isinstance(value, tuple):
+                    # Upstream stores e.g. ``temperatures`` as a tuple; JSON
+                    # has no tuple, and the strict slot rejects it unconverted.
+                    value = list(cast("tuple[object, ...]", value))
+                safe[name] = to_json_value(value)
     extra: dict[str, Any] = {"transcription_options": safe}
     vad = getattr(info, "duration_after_vad", None)
     if vad is not None:

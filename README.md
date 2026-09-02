@@ -178,9 +178,34 @@ All fields also fall back to environment variables
 | `hf_token` | `None` | **Secret** HF token for gated/private repos (masked in dumps). |
 | `model_path` | `None` | Optional **local** CTranslate2 checkpoint override. |
 
-Model weights load **lazily** on first transcription. Use `engine.prepare()`
-(or `standard-asr prepare …`) to pre-download/warm without transcribing.
-Downloads respect `STANDARD_ASR_ALLOW_DOWNLOAD`.
+Model weights load **lazily** on first transcription. Downloads respect
+`STANDARD_ASR_ALLOW_DOWNLOAD`.
+
+**Artifact lifecycle.** `standard-asr status faster-whisper/tiny`
+reports whether the preset's CTranslate2 bundle is cached. `ready` means the
+loader's own closure is present: `model.bin`, `config.json` (every decode
+reads its fields at request time), `tokenizer.json` (without it, upstream
+silently fetches one from the Hub past every download gate), and a
+vocabulary file (CTranslate2 refuses to load without one); the 128-mel
+presets additionally require their repo's `preprocessor_config.json`,
+without which upstream silently builds an 80-mel feature extractor whose
+output the model then rejects. The engine also verifies at load time that
+the feature extractor's mel count matches what the loaded model expects --
+the one fact only the loaded model can prove -- so a mismatched or
+converted-without-`--copy_files` bundle fails at `prepare()` with an
+actionable artifact error instead of a bare shape error at the first
+transcription. This check covers an operator `model_path` bundle of any
+Whisper variant.
+`standard-asr pull` acquires or repairs the bundle without loading a model.
+`pull --refresh` re-resolves a mutable revision and verifies against the
+source that the re-resolution happened: the downloader alone silently falls
+back to the local cache when the source is unreachable, and a refresh fails
+rather than report the stale cache as fresh (a pinned 40-hex commit is
+immutable and a no-op). With `local_files_only=true` the engine refuses
+every network transfer, including a refresh. `engine.prepare()` (or
+`standard-asr prepare …`) remains the **warm-up** hook: it loads the model
+into memory, acquiring first only when the cache is cold and downloads are
+allowed.
 
 ## Streaming
 

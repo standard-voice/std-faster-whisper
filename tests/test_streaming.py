@@ -16,13 +16,13 @@ from typing import Any
 import pytest
 from standard_asr import TranscriptionEvent
 from standard_asr.audio.format import AudioFormat
+from standard_asr.compliance import check_event_sequence, check_streaming_param_gating
 from standard_asr.contract.capabilities import (
     FinalityCap,
     FlagCap,
     ReconnectCap,
     StreamTimestampsCap,
 )
-from standard_asr.compliance import check_event_sequence, check_streaming_param_gating
 from standard_asr.contract.exceptions import UnsupportedFeatureError
 
 from std_faster_whisper import FasterWhisperASR, TinyASR
