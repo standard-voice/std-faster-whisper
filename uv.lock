@@ -1062,8 +1062,8 @@ wheels = [
 
 [[package]]
 name = "standard-asr"
-version = "0.1.1"
-source = { git = "https://github.com/standard-voice/standard_asr.git?rev=main#bf3d7940fe2304118614d0a7d3b95f4556a685c0" }
+version = "0.2.0.dev0"
+source = { git = "https://github.com/standard-voice/standard_asr.git?rev=main#e763c4c483a8034bf6ee8cac13b1b65cd614a7de" }
 dependencies = [
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
@@ -1076,6 +1076,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "faster-whisper" },
+    { name = "huggingface-hub" },
     { name = "standard-asr" },
 ]
 
@@ -1091,6 +1092,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "faster-whisper", specifier = ">=1.1,<2" },
+    { name = "huggingface-hub", specifier = ">=0.23" },
     { name = "standard-asr", git = "https://github.com/standard-voice/standard_asr.git?rev=main" },
 ]
 
