@@ -49,6 +49,7 @@ from standard_asr.contract.language import effective_language, normalize_bcp47
 
 from ._config import FasterWhisperConfig, provider_kwargs
 from ._convert import convert_segments, pcm_s16le_to_float32
+from ._guidance import echoes_guidance
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .engine import FasterWhisperASR
@@ -139,7 +140,13 @@ class FasterWhisperStreamingSession(TranscriptionSession):
             hotwords=" ".join(self._params.phrase_hints) if self._params.phrase_hints else None,
             **provider_kwargs(self._params.provider_params),
         )
-        return list(segments)
+        decoded = list(segments)
+        # A window with no speech can come back as the guidance itself (see _guidance).
+        if echoes_guidance(
+            "".join(seg.text for seg in decoded), self._params.prompt, self._params.phrase_hints
+        ):
+            return []
+        return decoded
 
     async def _produce(self) -> AsyncIterator[TranscriptionEvent]:
         """Drive the windowed re-decode loop and yield streaming events.

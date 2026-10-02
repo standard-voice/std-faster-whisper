@@ -74,6 +74,7 @@ from ._artifacts import (
 )
 from ._config import FasterWhisperConfig, FasterWhisperParams, provider_kwargs
 from ._convert import convert_segments, safe_extra
+from ._guidance import echoes_guidance
 from ._metadata import (
     DECLARED_CAPABILITIES,
     BaseModelProperties,
@@ -533,6 +534,9 @@ class FasterWhisperASR(EngineBase):
             ) from exc
 
         text = "".join(seg.text for seg in segment_list)
+        # Audio with no speech can come back as the guidance itself (see _guidance).
+        if echoes_guidance(text, params.prompt, params.phrase_hints):
+            return TranscriptionResult(text="", duration=info.duration)
         detected = normalize_bcp47(info.language) if info.language else None
         return TranscriptionResult(
             text=text,

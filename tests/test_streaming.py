@@ -226,3 +226,26 @@ def silent_to_array(seconds: float) -> tuple[Any, int]:
     import numpy as np
 
     return (np.zeros(int(seconds * 16000), dtype=np.float32), 16000)
+
+
+async def test_windows_that_are_the_prompt_are_dropped(
+    fake_faster_whisper: type[FakeWhisperModel],
+) -> None:
+    from standard_asr import RuntimeParams
+
+    prompt = "Jezo, Quick Notes, Standard ASR, Kestrelwood library card"
+
+    def segments_fn(_audio: Any, kwargs: dict[str, Any]) -> list[FakeSegment]:
+        # What Whisper can do with an initial_prompt and no speech.
+        return [FakeSegment(0.0, 1.0, kwargs["initial_prompt"])]
+
+    fake_faster_whisper.segments_fn = segments_fn
+    events: list[TranscriptionEvent] = []
+    async with TinyASR().start_transcription(
+        audio_format=_FMT, params=RuntimeParams(prompt=prompt)
+    ) as session:
+        session.feed([silent_pcm(2.0) for _ in range(4)])
+        async for event in session:
+            events.append(event)
+    assert all(e.type in ("progress", "done") for e in events)
+    assert session.result().text == ""

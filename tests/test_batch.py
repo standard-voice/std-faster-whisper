@@ -326,6 +326,41 @@ def test_transcribe_with_prompt_and_phrase_hints(
     assert kwargs["hotwords"] == "Anthropic Claude"
 
 
+def test_prompt_handed_back_on_silence_is_dropped(
+    fake_faster_whisper: type[FakeWhisperModel],
+) -> None:
+    # Whisper, given a prompt and no speech, can return the prompt itself.
+    prompt = "Jezo, Quick Notes, Standard ASR, Kestrelwood library card"
+    fake_faster_whisper.segments = [FakeSegment(0.0, 1.0, prompt)]
+    result = FasterWhisperASR(model_path=CT2_DIR).transcribe(
+        _audio(), RuntimeParams(language="en", prompt=prompt)
+    )
+    assert result.text == ""
+    assert result.segments is None
+
+
+def test_hotwords_handed_back_are_dropped(fake_faster_whisper: type[FakeWhisperModel]) -> None:
+    hints = ["Jezo", "Quick Notes", "Kestrelwood"]
+    fake_faster_whisper.segments = [FakeSegment(0.0, 1.0, " Jezo Quick Notes Kestrelwood.")]
+    result = FasterWhisperASR(model_path=CT2_DIR).transcribe(
+        _audio(), RuntimeParams(language="en", phrase_hints=hints)
+    )
+    assert result.text == ""
+
+
+def test_speech_using_the_prompts_words_is_kept(
+    fake_faster_whisper: type[FakeWhisperModel],
+) -> None:
+    prompt = "Jezo, Quick Notes, Standard ASR, Kestrelwood library card"
+    fake_faster_whisper.segments = [
+        FakeSegment(0.0, 1.0, " Open Jezo and renew the Kestrelwood library card.")
+    ]
+    result = FasterWhisperASR(model_path=CT2_DIR).transcribe(
+        _audio(), RuntimeParams(language="en", prompt=prompt)
+    )
+    assert result.text.strip() == "Open Jezo and renew the Kestrelwood library card."
+
+
 def test_guidance_constraints_are_declared() -> None:
     node = FasterWhisperASR.declared_capabilities.node_at("batch.guidance.prompt")
     assert isinstance(node, PromptCap)
