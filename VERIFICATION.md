@@ -178,8 +178,9 @@ wall time ≈1.1s. First segments observed:
 
 **(c) Streaming (windowed)** — the audio is fed in 1.0s `pcm_s16le` chunks; the
 session re-decodes the growing window and emits **partials that evolve into
-finals** (`stable_until=0` on every partial, segment ids `seg-0…seg-5` never
-reused). Abridged observed sequence:
+finals** (historically `stable_until=0`, now empty `stable_text`, on every partial;
+segment ids `seg-0…seg-5` never reused). Abridged observed sequence (the historical
+`su=0` is now printed as `stable=''`):
 
 ```
 partial[seg-0] (su=0): This is a crazy interesting past for

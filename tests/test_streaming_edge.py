@@ -63,6 +63,7 @@ async def test_streaming_partial_tail_carries_words(
     partials_with_words = [e for e in events if e.type == "partial" and e.words]
     assert partials_with_words
     assert [w.text for w in partials_with_words[-1].words] == ["Hi", "there"]
+    assert session.diagnostics() == []
 
 
 def test_append_pcm_ignores_empty_and_accumulates(

@@ -26,7 +26,7 @@ Strategy
 Honesty
 -------
 Whisper re-decodes the entire window each pass and may rewrite ANY earlier text,
-so we set ``stable_until=0`` on every ``partial`` (``word_stability=false``) and
+so every ``partial`` carries ``stable_text=""`` (``partial_stability=false``). We
 finalize a sentence only once it is several seconds behind the frontier. We never
 emit ``supersede`` (``re_segments=false``): finalized segment ids are immutable
 and the partial only ever describes the current tail. Segment ids are synthesized
@@ -238,7 +238,7 @@ class FasterWhisperStreamingSession(TranscriptionSession):
         Sentences that end at least ``settle_margin_s`` behind ``cursor`` (or all
         of them on the final pass) become ``final`` events with stable ids; the
         remaining tail is one ``partial`` for the current in-progress segment.
-        ``stable_until`` is always 0 (Whisper may rewrite the window).
+        Each ``partial`` carries ``stable_text=""`` (Whisper may rewrite the window).
 
         Args:
             segments: Standard ASR ``Segment`` objects from this decode.
@@ -261,7 +261,6 @@ class FasterWhisperStreamingSession(TranscriptionSession):
                 TranscriptionEvent.final(
                     segment_id=f"seg-{idx}",
                     text=seg.text,
-                    stable_until=0,
                     start=seg.start,
                     end=seg.end,
                     words=seg.words,
@@ -283,7 +282,6 @@ class FasterWhisperStreamingSession(TranscriptionSession):
                 TranscriptionEvent.partial(
                     segment_id=f"seg-{settled}",
                     text=tail_text,
-                    stable_until=0,
                     start=tail[0].start,
                     end=tail[-1].end,
                     words=tail_words,
