@@ -132,9 +132,9 @@ DECLARED_CAPABILITIES = DeclaredCapabilities(
     #   * streaming_input  = True  : we accept incremental PCM frames.
     #   * streaming_output = True  : we emit results before all audio arrives.
     #   * emits_partials   = True  : each re-decode emits a partial.
-    #   * word_stability   = False : Whisper re-decodes the whole window and may
+    #   * partial_stability = False : Whisper re-decodes the whole window and may
     #         rewrite ANY earlier text; we have no right-context guarantee, so we
-    #         report stable_until=0 always (spec ST §4.2) and declare false.
+    #         report stable_text="" on every partial (spec ST §4.2) and declare false.
     #   * re_segments      = False : we never emit `supersede`. Each partial is
     #         the single growing segment's full current text; we re-segment only
     #         the (cumulative) text in place, never retire a previously announced
@@ -160,7 +160,7 @@ DECLARED_CAPABILITIES = DeclaredCapabilities(
         ),
         emits_partials=FlagCap(supported=True),
         re_segments=FlagCap(supported=False),
-        word_stability=FlagCap(supported=False),
+        partial_stability=FlagCap(supported=False),
         reconnect=ReconnectCap(mode="unsupported"),
         finality_level=FinalityCap(mode="final"),
         timestamps=StreamTimestampsCap(mode="post_align"),

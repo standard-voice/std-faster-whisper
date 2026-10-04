@@ -178,8 +178,9 @@ wall time ≈1.1s. First segments observed:
 
 **(c) Streaming (windowed)** — the audio is fed in 1.0s `pcm_s16le` chunks; the
 session re-decodes the growing window and emits **partials that evolve into
-finals** (`stable_until=0` on every partial, segment ids `seg-0…seg-5` never
-reused). Abridged observed sequence:
+finals** (historically `stable_until=0`, now empty `stable_text`, on every partial;
+segment ids `seg-0…seg-5` never reused). Abridged observed sequence (the historical
+`su=0` is now printed as `stable=''`):
 
 ```
 partial[seg-0] (su=0): This is a crazy interesting past for
@@ -227,7 +228,9 @@ TOTAL     353      0     60      0   100%
 
 - The first transcribe/script run downloads the `tiny` model to the Hugging Face
   cache; later runs are offline-capable and fast.
-- `uv.lock` is committed, so `uv sync` reproduces the exact dependency set above.
+- `uv.lock` is committed, so `uv sync` reproduces the locked dependency set. The
+  output recorded above comes from an earlier environment, the one in the table
+  at the top (`standard-asr` 0.1.0), and has not been recorded again.
 - No CUDA is required or used; everything runs on CPU via CTranslate2 `int8`.
 - The unit suite is hermetic (fakes the model); only §3–§4 perform real inference
   and need network access on first run.

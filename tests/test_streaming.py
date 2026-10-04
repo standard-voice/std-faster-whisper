@@ -46,7 +46,7 @@ def test_streaming_capabilities_are_conservative() -> None:
     assert caps.supports("streaming_output") is True
     assert caps.supports("streaming.emits_partials") is True
     # Windowed re-decode => no stability, no supersede, no reconnect.
-    assert caps.supports("streaming.word_stability") is False
+    assert caps.supports("streaming.partial_stability") is False
     assert caps.supports("streaming.re_segments") is False
     node = caps.node_at("streaming.reconnect")
     assert isinstance(node, ReconnectCap)
@@ -99,10 +99,13 @@ async def test_streaming_emits_partials_then_finals(
     assert "partial" in types
     assert "final" in types
     assert types[-1] == "done"
-    # Every partial reports stable_until=0 (Whisper may rewrite the window).
+    # Every partial carries empty stable text (Whisper may rewrite the window).
     for e in events:
         if e.type == "partial":
-            assert e.stable_until == 0
+            assert e.stable_text == ""
+        elif e.type == "final":
+            assert e.stable_text == e.text
+    assert session.diagnostics() == []
     # Finals carry stable, never-reused segment ids.
     final_ids = [e.segment_id for e in events if e.type == "final"]
     assert final_ids == sorted(set(final_ids), key=final_ids.index)  # no dupes/reorder
@@ -133,8 +136,11 @@ async def test_recorded_stream_obeys_event_sequence_contract(
         async for event in session:
             events.append(event)
 
-    report = check_event_sequence(events)
-    assert report.passed, [i.message for i in report.issues]
+    assert session.diagnostics() == []
+    for capabilities in (engine.declared_capabilities, engine.effective_capabilities):
+        report = check_event_sequence(events, capabilities=capabilities)
+        assert report.passed, [i.message for i in report.issues]
+        assert report.issues == []
 
 
 async def test_streaming_silence_emits_progress_then_done(
@@ -151,6 +157,7 @@ async def test_streaming_silence_emits_progress_then_done(
             events.append(event)
     assert events[-1].type == "done"
     assert all(e.type in {"progress", "done"} for e in events)
+    assert session.diagnostics() == []
 
 
 async def test_streaming_whole_input_path(
@@ -166,6 +173,7 @@ async def test_streaming_whole_input_path(
             events.append(event)
     assert events[-1].type == "done"
     assert "whole input result" in session.result().text
+    assert session.diagnostics() == []
 
 
 async def test_streaming_decode_failure_becomes_engine_error_event(

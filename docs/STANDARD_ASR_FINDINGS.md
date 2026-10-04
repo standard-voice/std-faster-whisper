@@ -277,10 +277,10 @@ that runs the per-engine checks across every discovered model and summarizes.
 ## What worked notably well (worth keeping)
 
 - **Fail-closed capabilities + honest streaming declaration.** Declaring
-  `word_stability=false`, `re_segments=false`, `reconnect=unsupported`,
+  `partial_stability=false`, `re_segments=false`, `reconnect=unsupported`,
   `finality_level=final`, `timestamps=post_align` let me ship a *truthful*
   windowed-streaming engine over a batch model. Apps can read
-  `engine.supports("streaming.word_stability")` and adapt. This is the protocol's
+  `engine.supports("streaming.partial_stability")` and adapt. This is the protocol's
   honesty principle paying off concretely — I never had to fake a guarantee.
 - **The guidance constraint gate** (`max_tokens` / `max_terms`) turning
   faster-whisper's *silent* prompt truncation into a loud, pre-flight strict

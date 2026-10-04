@@ -168,7 +168,8 @@ All fields also fall back to environment variables
 | --- | --- | --- |
 | `device` | `"auto"` | `"cpu"`, `"cuda"`, or `"auto"`. |
 | `compute_type` | `"default"` | CTranslate2 quantization (`"int8"`, `"float16"`, …). |
-| `device_index` | `0` | CTranslate2 device index or list. |
+| `device_index` | `0` | CTranslate2 device index. For several devices, set `device_indices`. |
+| `device_indices` | `None` | CTranslate2 device indices for multi-device inference; wins over `device_index` when set. |
 | `cpu_threads` | `0` | CPU threads (`0` = CTranslate2 default). |
 | `num_workers` | `1` | Parallel-inference worker threads. |
 | `default_language` | `"auto"` | Language axis default (BCP-47 or `"auto"`). |
@@ -220,8 +221,8 @@ nothing is faked:
   `final` events with stable, never-reused segment ids.
 - The current tail is emitted as one `partial`.
 - Because Whisper re-decodes the window and may rewrite earlier text, every
-  `partial` reports **`stable_until = 0`** and the engine declares
-  `word_stability = false`, `re_segments = false` (it never emits `supersede`),
+  `partial` carries an empty **`stable_text`** and the engine declares
+  `partial_stability = false`, `re_segments = false` (it never emits `supersede`),
   `reconnect = unsupported` (a local in-process model has no transport to
   reconnect), `finality_level = final`, and `timestamps = post_align`.
 
@@ -229,7 +230,7 @@ This is a **pragmatic** way to get live, growing output from a batch engine — 
 is not a true low-latency incremental recognizer, and the higher latency / compute
 cost reflect re-decoding the window. For genuine low-latency streaming, prefer a
 natively streaming engine plugin. (Capability discovery makes this honest: an
-application can read `engine.supports("streaming.word_stability")` and adapt.)
+application can read `engine.supports("streaming.partial_stability")` and adapt.)
 
 ## Verifying
 
