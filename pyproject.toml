@@ -24,6 +24,12 @@ dependencies = [
     # CTranslate2). A thin adapter tracks it via this version pin -- see
     # docs/STANDARD_ASR_FINDINGS.md for the adapter-vs-fork rationale.
     "faster-whisper>=1.1,<2",
+    # Every faster-whisper release through 1.2.1 passes av.open() a
+    # metadata_errors argument that PyAV 19 removed, so decoding a file or
+    # bytes fails with TypeError. The plugin does not import av; this line only
+    # caps it. When a release includes the fix (SYSTRAN/faster-whisper#1495),
+    # raise the faster-whisper floor to that release and remove this line.
+    "av>=11,<19",
     # The artifact status/acquisition paths import huggingface_hub directly
     # (error classes for access translation); 0.23 is the floor where the
     # public errors module exists. faster-whisper pulls it in anyway; this pin

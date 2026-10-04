@@ -1107,6 +1107,7 @@ name = "std-faster-whisper"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "av" },
     { name = "faster-whisper" },
     { name = "huggingface-hub" },
     { name = "standard-asr" },
@@ -1123,6 +1124,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "av", specifier = ">=11,<19" },
     { name = "faster-whisper", specifier = ">=1.1,<2" },
     { name = "huggingface-hub", specifier = ">=0.23" },
     { name = "standard-asr", git = "https://github.com/standard-voice/standard_asr.git?rev=main" },
