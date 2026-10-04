@@ -228,7 +228,9 @@ TOTAL     353      0     60      0   100%
 
 - The first transcribe/script run downloads the `tiny` model to the Hugging Face
   cache; later runs are offline-capable and fast.
-- `uv.lock` is committed, so `uv sync` reproduces the exact dependency set above.
+- `uv.lock` is committed, so `uv sync` reproduces the locked dependency set. The
+  output recorded above comes from an earlier environment, the one in the table
+  at the top (`standard-asr` 0.1.0), and has not been recorded again.
 - No CUDA is required or used; everything runs on CPU via CTranslate2 `int8`.
 - The unit suite is hermetic (fakes the model); only §3–§4 perform real inference
   and need network access on first run.
