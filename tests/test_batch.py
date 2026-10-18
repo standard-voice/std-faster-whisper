@@ -259,9 +259,12 @@ def test_transcribe_array_basic(fake_faster_whisper: type[FakeWhisperModel]) -> 
 def test_transcribe_text_is_the_segment_texts_with_their_leading_spaces(
     fake_faster_whisper: type[FakeWhisperModel],
 ) -> None:
-    # faster-whisper starts every segment text with a space. Spec TR.1: the
-    # segment texts pass through unchanged and `text` is their plain
-    # concatenation, so the transcript keeps the first segment's leading space.
+    # faster-whisper returns each segment text as the tokenizer decodes it. In a
+    # space-delimited script such as English, the segment's first token carries
+    # the space before its word, so the segment text starts with one. A Chinese
+    # or Japanese segment starts with none. Spec TR.1: the engine passes each
+    # segment text through unchanged, and `text` is their plain concatenation.
+    # The transcript therefore keeps the first segment's leading space.
     fake_faster_whisper.segments = [
         FakeSegment(0.0, 1.0, " Hello"),
         FakeSegment(1.0, 2.0, " world."),
@@ -270,7 +273,6 @@ def test_transcribe_text_is_the_segment_texts_with_their_leading_spaces(
     assert result.segments is not None
     assert [s.text for s in result.segments] == [" Hello", " world."]
     assert result.text == " Hello world."
-    assert result.text == "".join(s.text for s in result.segments)
 
 
 def test_transcribe_wraps_engine_failure_as_transcription_error(

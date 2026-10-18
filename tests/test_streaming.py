@@ -117,9 +117,11 @@ async def test_streaming_emits_partials_then_finals(
 async def test_streaming_segments_keep_their_leading_space(
     fake_faster_whisper: type[FakeWhisperModel],
 ) -> None:
-    # faster-whisper starts every segment text with a space. Spec TR.1: each
-    # partial and final carries the segment text unchanged, and the reduced
-    # transcript is their plain concatenation, leading space included.
+    # In a space-delimited script such as English, the segment's first token
+    # carries the space before its word, so faster-whisper's segment text starts
+    # with one. A Chinese or Japanese segment starts with none. Spec TR.1: each
+    # partial and final carries the segment text unchanged. `session.result().text`
+    # is the final texts concatenated with no separator, leading space included.
     def segments_fn(audio: Any, _kwargs: dict[str, Any]) -> list[FakeSegment]:
         segs = [FakeSegment(0.0, 2.0, " First sentence.")]
         if _window_seconds(audio) >= 8:
@@ -138,12 +140,12 @@ async def test_streaming_segments_keep_their_leading_space(
     finals = [e for e in events if e.type == "final"]
     assert [e.text for e in finals] == [" First sentence.", " Second sentence."]
     partials = [e for e in events if e.type == "partial"]
-    assert partials
-    assert all((e.text or "").startswith(" ") for e in partials)
-    result = session.result()
-    assert result.text == " First sentence. Second sentence."
-    assert result.segments is not None
-    assert result.text == "".join(s.text for s in result.segments)
+    # One partial: the first decode, over a four-second window, returns one
+    # sentence that is not yet settled. The second decode, over eight seconds,
+    # settles both; a sentence that ends exactly at the settle margin counts as
+    # settled.
+    assert [e.text for e in partials] == [" First sentence."]
+    assert session.result().text == " First sentence. Second sentence."
     assert session.diagnostics() == []
 
 
