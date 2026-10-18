@@ -114,6 +114,39 @@ async def test_streaming_emits_partials_then_finals(
     assert "First sentence." in text
 
 
+async def test_streaming_segments_keep_their_leading_space(
+    fake_faster_whisper: type[FakeWhisperModel],
+) -> None:
+    # faster-whisper starts every segment text with a space. Spec TR.1: each
+    # partial and final carries the segment text unchanged, and the reduced
+    # transcript is their plain concatenation, leading space included.
+    def segments_fn(audio: Any, _kwargs: dict[str, Any]) -> list[FakeSegment]:
+        segs = [FakeSegment(0.0, 2.0, " First sentence.")]
+        if _window_seconds(audio) >= 8:
+            segs.append(FakeSegment(2.0, 5.0, " Second sentence."))
+        return segs
+
+    fake_faster_whisper.segments_fn = segments_fn
+
+    engine = TinyASR()
+    events: list[TranscriptionEvent] = []
+    async with engine.start_transcription(audio_format=_FMT) as session:
+        session.feed([silent_pcm(2.0) for _ in range(6)])
+        async for event in session:
+            events.append(event)
+
+    finals = [e for e in events if e.type == "final"]
+    assert [e.text for e in finals] == [" First sentence.", " Second sentence."]
+    partials = [e for e in events if e.type == "partial"]
+    assert partials
+    assert all((e.text or "").startswith(" ") for e in partials)
+    result = session.result()
+    assert result.text == " First sentence. Second sentence."
+    assert result.segments is not None
+    assert result.text == "".join(s.text for s in result.segments)
+    assert session.diagnostics() == []
+
+
 async def test_recorded_stream_obeys_event_sequence_contract(
     fake_faster_whisper: type[FakeWhisperModel],
 ) -> None:
