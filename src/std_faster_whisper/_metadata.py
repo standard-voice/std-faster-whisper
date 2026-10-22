@@ -27,6 +27,7 @@ from standard_asr.contract.capabilities import (
     PromptCap,
     PromptConstraints,
     ReconnectCap,
+    RuntimeOverrideCap,
     StreamingCapabilities,
     StreamingGuidanceCaps,
     StreamTimestampsCap,
@@ -121,7 +122,7 @@ _WORD_TS = WordTimestampsCap(supported=True, granularities=["word", "segment"])
 
 DECLARED_CAPABILITIES = DeclaredCapabilities(
     batch=BatchCapabilities(
-        language=LanguageCaps(runtime_override=FlagCap(supported=True)),
+        language=LanguageCaps(runtime_override=RuntimeOverrideCap(supported=True)),
         word_timestamps=_WORD_TS,
         guidance=_GUIDANCE,
     ),
@@ -152,7 +153,7 @@ DECLARED_CAPABILITIES = DeclaredCapabilities(
     # Streaming guidance mirrors batch (prompt/phrase_hints honored on each
     # window); mutable_mid_stream stays false (params frozen at start, spec RT R5).
     streaming=StreamingCapabilities(
-        language=LanguageCaps(runtime_override=FlagCap(supported=True)),
+        language=LanguageCaps(runtime_override=RuntimeOverrideCap(supported=True)),
         word_timestamps=_WORD_TS,
         guidance=StreamingGuidanceCaps(
             prompt=_GUIDANCE.prompt,
