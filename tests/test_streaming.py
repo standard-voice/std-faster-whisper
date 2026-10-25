@@ -19,9 +19,9 @@ from standard_asr.audio.format import AudioFormat
 from standard_asr.compliance import check_event_sequence, check_streaming_param_gating
 from standard_asr.contract.capabilities import (
     FinalityCapability,
-    TraitFlagCapability,
     ReconnectCapability,
     StreamTimestampsCapability,
+    TraitFlagCapability,
 )
 from standard_asr.contract.exceptions import UnsupportedFeatureError
 
