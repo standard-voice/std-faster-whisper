@@ -114,6 +114,41 @@ async def test_streaming_emits_partials_then_finals(
     assert "First sentence." in text
 
 
+async def test_streaming_segments_keep_their_leading_space(
+    fake_faster_whisper: type[FakeWhisperModel],
+) -> None:
+    # In a space-delimited script such as English, the segment's first token
+    # carries the space before its word, so faster-whisper's segment text starts
+    # with one. A Chinese or Japanese segment starts with none. Spec TR.1: each
+    # partial and final carries the segment text unchanged. `session.result().text`
+    # is the final texts concatenated with no separator, leading space included.
+    def segments_fn(audio: Any, _kwargs: dict[str, Any]) -> list[FakeSegment]:
+        segs = [FakeSegment(0.0, 2.0, " First sentence.")]
+        if _window_seconds(audio) >= 8:
+            segs.append(FakeSegment(2.0, 5.0, " Second sentence."))
+        return segs
+
+    fake_faster_whisper.segments_fn = segments_fn
+
+    engine = TinyASR()
+    events: list[TranscriptionEvent] = []
+    async with engine.start_transcription(audio_format=_FMT) as session:
+        session.feed([silent_pcm(2.0) for _ in range(6)])
+        async for event in session:
+            events.append(event)
+
+    finals = [e for e in events if e.type == "final"]
+    assert [e.text for e in finals] == [" First sentence.", " Second sentence."]
+    partials = [e for e in events if e.type == "partial"]
+    # One partial: the first decode, over a four-second window, returns one
+    # sentence that is not yet settled. The second decode, over eight seconds,
+    # settles both; a sentence that ends exactly at the settle margin counts as
+    # settled.
+    assert [e.text for e in partials] == [" First sentence."]
+    assert session.result().text == " First sentence. Second sentence."
+    assert session.diagnostics() == []
+
+
 async def test_recorded_stream_obeys_event_sequence_contract(
     fake_faster_whisper: type[FakeWhisperModel],
 ) -> None:
