@@ -96,6 +96,9 @@ class FasterWhisperStreamingSession(TranscriptionSession):
         # ``_window`` to avoid clobbering them -- see STANDARD_ASR_FINDINGS.md.
         self._window = np.zeros(0, dtype=np.float32)
         self._language = self._resolve_language()
+        # The latest decode, which runs in a worker thread. Canceling the
+        # producer cannot stop that thread, so _close waits for it.
+        self._decode_task: asyncio.Task[list[Any]] | None = None
         # Index into the synthesized list of decoded sentences up to which we
         # have already emitted a `final`. Finalized ids are immutable.
         self._finalized_count = 0
@@ -186,6 +189,22 @@ class FasterWhisperStreamingSession(TranscriptionSession):
             yield event
         yield TranscriptionEvent.done(audio_processed_until=self._window_seconds())
 
+    async def _close(self) -> None:
+        """Wait for a decode that a canceled producer left running.
+
+        The engine can serve its next call only after the decode's worker
+        thread returns (standard-asr protocol, streaming section 6.5). A
+        decode that fails after the session ended is logged, not raised: no
+        consumer is left to receive it.
+        """
+        decode = self._decode_task
+        if decode is None or decode.done():
+            return
+        try:
+            await asyncio.shield(decode)
+        except Exception:
+            _LOGGER.exception("faster-whisper streaming decode failed after the session ended")
+
     def _append_pcm(self, data: bytes) -> None:
         """Append decoded PCM bytes to the running float32 window.
 
@@ -217,7 +236,12 @@ class FasterWhisperStreamingSession(TranscriptionSession):
         if self._window.size == 0:
             return [TranscriptionEvent.progress(audio_processed_until=cursor)]
         try:
-            raw = await asyncio.to_thread(self._decode, self._window, want_words=want_words)
+            # Shielded, so that canceling the producer leaves the task alive
+            # for _close to wait on: its worker thread keeps running anyway.
+            self._decode_task = asyncio.ensure_future(
+                asyncio.to_thread(self._decode, self._window, want_words=want_words)
+            )
+            raw = await asyncio.shield(self._decode_task)
         except Exception as exc:
             _LOGGER.exception("faster-whisper streaming decode failed")
             return [
