@@ -19,10 +19,10 @@ import pytest
 from standard_asr import RuntimeParams, StandardASR
 from standard_asr.audio.input import AudioBytes, AudioPath
 from standard_asr.contract.capabilities import (
-    DeclaredCapabilities,
-    PhraseHintsCap,
-    PromptCap,
-    WordTimestampsCap,
+    Capabilities,
+    PhraseHintsCapability,
+    PromptCapability,
+    WordTimestampsCapability,
 )
 from standard_asr.contract.exceptions import (
     ArtifactAcquisitionError,
@@ -78,7 +78,7 @@ def test_engine_is_standard_asr() -> None:
 
 def test_class_level_metadata() -> None:
     assert isinstance(FasterWhisperASR.properties, FasterWhisperProperties)
-    assert isinstance(FasterWhisperASR.declared_capabilities, DeclaredCapabilities)
+    assert isinstance(FasterWhisperASR.declared_capabilities, Capabilities)
     assert FasterWhisperASR.provider_params_type is FasterWhisperParams
     assert FasterWhisperASR.properties.model_id == "faster-whisper/large-v3"
 
@@ -315,7 +315,7 @@ def test_transcribe_with_word_timestamps(fake_faster_whisper: type[FakeWhisperMo
 
 def test_segment_granularity_is_declared() -> None:
     node = FasterWhisperASR.declared_capabilities.node_at("batch.word_timestamps")
-    assert isinstance(node, WordTimestampsCap)
+    assert isinstance(node, WordTimestampsCapability)
     assert set(node.granularities) == {"word", "segment"}
 
 
@@ -382,10 +382,10 @@ def test_speech_using_the_prompts_words_is_kept(
 
 def test_guidance_constraints_are_declared() -> None:
     node = FasterWhisperASR.declared_capabilities.node_at("batch.guidance.prompt")
-    assert isinstance(node, PromptCap)
+    assert isinstance(node, PromptCapability)
     assert node.constraints.max_tokens == 200
     hints = FasterWhisperASR.declared_capabilities.node_at("batch.guidance.phrase_hints")
-    assert isinstance(hints, PhraseHintsCap)
+    assert isinstance(hints, PhraseHintsCapability)
     assert hints.constraints.max_terms == 50
     assert hints.constraints.max_chars_per_term == 40
 

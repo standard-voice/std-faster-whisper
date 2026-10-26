@@ -17,20 +17,21 @@ from typing import Literal
 
 from standard_asr.contract.capabilities import (
     BatchCapabilities,
-    DeclaredCapabilities,
-    FinalityCap,
-    FlagCap,
-    GuidanceCaps,
-    LanguageCaps,
-    PhraseHintsCap,
+    Capabilities,
+    FinalityCapability,
+    GuidanceCapabilities,
+    LanguageCapabilities,
+    LanguageOverrideCapability,
+    PhraseHintsCapability,
     PhraseHintsConstraints,
-    PromptCap,
+    PromptCapability,
     PromptConstraints,
-    ReconnectCap,
+    ReconnectCapability,
     StreamingCapabilities,
-    StreamingGuidanceCaps,
-    StreamTimestampsCap,
-    WordTimestampsCap,
+    StreamingGuidanceCapabilities,
+    StreamTimestampsCapability,
+    TraitFlagCapability,
+    WordTimestampsCapability,
 )
 from standard_asr.engine import BaseProperties, InputKind, SampleRateRange
 
@@ -98,9 +99,9 @@ class FasterWhisperProperties(BaseProperties):
 # below the ~223 hard cap with headroom: a long Latin word / URL is 1 unit here
 # but several BPE tokens upstream.
 # --------------------------------------------------------------------------- #
-_GUIDANCE = GuidanceCaps(
-    prompt=PromptCap(supported=True, constraints=PromptConstraints(max_tokens=200)),
-    phrase_hints=PhraseHintsCap(
+_GUIDANCE = GuidanceCapabilities(
+    prompt=PromptCapability(supported=True, constraints=PromptConstraints(max_tokens=200)),
+    phrase_hints=PhraseHintsCapability(
         supported=True,
         # Hotwords are joined into ONE string sharing the ~223-token budget; keep
         # term count and per-term length conservative so the combined set stays
@@ -117,11 +118,11 @@ _GUIDANCE = GuidanceCaps(
 # always-satisfiable request as a false incompatibility (spec TR.3). "word"
 # flips the upstream word_timestamps=True forced-alignment pass on; "char" is
 # unsupported.
-_WORD_TS = WordTimestampsCap(supported=True, granularities=["word", "segment"])
+_WORD_TS = WordTimestampsCapability(supported=True, granularities=["word", "segment"])
 
-DECLARED_CAPABILITIES = DeclaredCapabilities(
+DECLARED_CAPABILITIES = Capabilities(
     batch=BatchCapabilities(
-        language=LanguageCaps(runtime_override=FlagCap(supported=True)),
+        language=LanguageCapabilities(runtime_override=LanguageOverrideCapability(supported=True)),
         word_timestamps=_WORD_TS,
         guidance=_GUIDANCE,
     ),
@@ -152,25 +153,25 @@ DECLARED_CAPABILITIES = DeclaredCapabilities(
     # Streaming guidance mirrors batch (prompt/phrase_hints honored on each
     # window); mutable_mid_stream stays false (params frozen at start, spec RT R5).
     streaming=StreamingCapabilities(
-        language=LanguageCaps(runtime_override=FlagCap(supported=True)),
+        language=LanguageCapabilities(runtime_override=LanguageOverrideCapability(supported=True)),
         word_timestamps=_WORD_TS,
-        guidance=StreamingGuidanceCaps(
+        guidance=StreamingGuidanceCapabilities(
             prompt=_GUIDANCE.prompt,
             phrase_hints=_GUIDANCE.phrase_hints,
         ),
-        emits_partials=FlagCap(supported=True),
-        re_segments=FlagCap(supported=False),
-        partial_stability=FlagCap(supported=False),
-        reconnect=ReconnectCap(mode="unsupported"),
-        finality_level=FinalityCap(mode="final"),
-        timestamps=StreamTimestampsCap(mode="post_align"),
+        emits_partials=TraitFlagCapability(supported=True),
+        re_segments=TraitFlagCapability(supported=False),
+        partial_stability=TraitFlagCapability(supported=False),
+        reconnect=ReconnectCapability(mode="unsupported"),
+        finality_level=FinalityCapability(mode="final"),
+        timestamps=StreamTimestampsCapability(mode="post_align"),
     ),
-    streaming_input=FlagCap(supported=True),
-    streaming_output=FlagCap(supported=True),
+    streaming_input=TraitFlagCapability(supported=True),
+    streaming_output=TraitFlagCapability(supported=True),
     # faster-whisper does NOT resample arbitrary arrays itself in our contract;
     # the standard layer resamples to 16 kHz before us. Informational only
     # (spec C 3.2); accepted_sample_rates stays authoritative.
-    self_resamples=FlagCap(supported=False),
+    self_resamples=TraitFlagCapability(supported=False),
 )
 
 
