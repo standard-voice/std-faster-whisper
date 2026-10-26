@@ -256,6 +256,25 @@ def test_transcribe_array_basic(fake_faster_whisper: type[FakeWhisperModel]) -> 
     assert kwargs["word_timestamps"] is False
 
 
+def test_transcribe_text_is_the_segment_texts_with_their_leading_spaces(
+    fake_faster_whisper: type[FakeWhisperModel],
+) -> None:
+    # faster-whisper returns each segment text as the tokenizer decodes it. In a
+    # space-delimited script such as English, the segment's first token carries
+    # the space before its word, so the segment text starts with one. A Chinese
+    # or Japanese segment starts with none. Spec TR.1: the engine passes each
+    # segment text through unchanged, and `text` is their plain concatenation.
+    # The transcript therefore keeps the first segment's leading space.
+    fake_faster_whisper.segments = [
+        FakeSegment(0.0, 1.0, " Hello"),
+        FakeSegment(1.0, 2.0, " world."),
+    ]
+    result = FasterWhisperASR(model_path=CT2_DIR).transcribe(_audio(), RuntimeParams(language="en"))
+    assert result.segments is not None
+    assert [s.text for s in result.segments] == [" Hello", " world."]
+    assert result.text == " Hello world."
+
+
 def test_transcribe_wraps_engine_failure_as_transcription_error(
     fake_faster_whisper: type[FakeWhisperModel],
 ) -> None:
@@ -358,7 +377,7 @@ def test_speech_using_the_prompts_words_is_kept(
     result = FasterWhisperASR(model_path=CT2_DIR).transcribe(
         _audio(), RuntimeParams(language="en", prompt=prompt)
     )
-    assert result.text.strip() == "Open Jezo and renew the Kestrelwood library card."
+    assert result.text == " Open Jezo and renew the Kestrelwood library card."
 
 
 def test_guidance_constraints_are_declared() -> None:
