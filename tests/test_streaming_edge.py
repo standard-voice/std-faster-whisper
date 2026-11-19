@@ -5,6 +5,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
+import threading
 from typing import Any
 
 import numpy as np
@@ -132,3 +135,49 @@ def test_prepared_to_pcm_quantizes_array() -> None:
     assert decoded[2] == -32767  # -1.0
     assert decoded[3] == 32767  # 2.0 clipped to 1.0
     assert decoded[4] == 0  # NaN -> 0
+
+
+async def test_closing_a_canceled_session_waits_for_its_decode(
+    fake_faster_whisper: type[FakeWhisperModel],
+) -> None:
+    # Canceling the producer cannot stop a decode's worker thread. The
+    # session's close waits for it, so the engine can serve its next call
+    # (standard-asr protocol, streaming section 6.5).
+    started, release, finished = threading.Event(), threading.Event(), threading.Event()
+
+    def segments_fn(_audio: Any, _kwargs: dict[str, Any]) -> list[FakeSegment]:
+        started.set()
+        release.wait(5)
+        finished.set()
+        return [FakeSegment(0.0, 1.0, "hi")]
+
+    fake_faster_whisper.segments_fn = segments_fn
+    engine = TinyASR()
+    async with engine.start_transcription(audio_format=_FMT, params=RuntimeParams()) as session:
+        session.feed([silent_pcm(2.0) for _ in range(3)])
+        while not started.is_set():
+            await asyncio.sleep(0.01)
+        # Leaving the block cancels the producer while the decode runs.
+        threading.Timer(0.2, release.set).start()
+    assert finished.is_set()
+
+
+async def test_a_decode_that_fails_after_the_session_ended_is_logged(
+    fake_faster_whisper: type[FakeWhisperModel], caplog: pytest.LogCaptureFixture
+) -> None:
+    started, release = threading.Event(), threading.Event()
+
+    def segments_fn(_audio: Any, _kwargs: dict[str, Any]) -> list[FakeSegment]:
+        started.set()
+        release.wait(5)
+        raise RuntimeError("decode failed")
+
+    fake_faster_whisper.segments_fn = segments_fn
+    engine = TinyASR()
+    with caplog.at_level(logging.ERROR):
+        async with engine.start_transcription(audio_format=_FMT, params=RuntimeParams()) as session:
+            session.feed([silent_pcm(2.0) for _ in range(3)])
+            while not started.is_set():
+                await asyncio.sleep(0.01)
+            threading.Timer(0.2, release.set).start()
+    assert "decode failed after the session ended" in caplog.text
