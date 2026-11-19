@@ -18,10 +18,10 @@ from standard_asr import TranscriptionEvent
 from standard_asr.audio.format import AudioFormat
 from standard_asr.compliance import check_event_sequence, check_streaming_param_gating
 from standard_asr.contract.capabilities import (
-    FinalityCap,
-    FlagCap,
-    ReconnectCap,
-    StreamTimestampsCap,
+    FinalityCapability,
+    ReconnectCapability,
+    StreamTimestampsCapability,
+    TraitFlagCapability,
 )
 from standard_asr.contract.exceptions import UnsupportedFeatureError
 
@@ -49,20 +49,20 @@ def test_streaming_capabilities_are_conservative() -> None:
     assert caps.supports("streaming.partial_stability") is False
     assert caps.supports("streaming.re_segments") is False
     node = caps.node_at("streaming.reconnect")
-    assert isinstance(node, ReconnectCap)
+    assert isinstance(node, ReconnectCapability)
     assert node.mode == "unsupported"
     finality = caps.node_at("streaming.finality_level")
-    assert isinstance(finality, FinalityCap)
+    assert isinstance(finality, FinalityCapability)
     assert finality.mode == "final"
     ts = caps.node_at("streaming.timestamps")
-    assert isinstance(ts, StreamTimestampsCap)
+    assert isinstance(ts, StreamTimestampsCapability)
     assert ts.mode == "post_align"
 
 
 def test_only_streaming_output_engine_would_reject_incremental() -> None:
     # Sanity: our engine DOES declare streaming_input, so a no-arg / audio_format
     # session is allowed (the inverse case is covered by the core suite).
-    assert FasterWhisperASR.declared_capabilities.node_at("streaming_input") == FlagCap(
+    assert FasterWhisperASR.declared_capabilities.node_at("streaming_input") == TraitFlagCapability(
         supported=True
     )
 

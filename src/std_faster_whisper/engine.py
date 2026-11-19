@@ -40,7 +40,7 @@ from standard_asr.contract.artifacts import (
     ArtifactReport,
     ArtifactRequirement,
 )
-from standard_asr.contract.capabilities import DeclaredCapabilities
+from standard_asr.contract.capabilities import Capabilities
 from standard_asr.contract.exceptions import (
     ArtifactAcquisitionError,
     ArtifactUnavailableError,
@@ -119,7 +119,7 @@ class FasterWhisperASR(EngineBase):
     required_bundle_files: ClassVar[tuple[str, ...]] = ("preprocessor_config.json",)
 
     properties: ClassVar[BaseProperties] = LargeV3Properties()
-    declared_capabilities: ClassVar[DeclaredCapabilities] = DECLARED_CAPABILITIES
+    declared_capabilities: ClassVar[Capabilities] = DECLARED_CAPABILITIES
     #: Static upper bounds over every supported config: the Hub presets support
     #: explicit artifact-only acquisition (upstream ``download_model``) and can
     #: also download inside ``WhisperModel(...)`` on first use. A ``model_path``
